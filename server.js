@@ -99,18 +99,21 @@ Return ONLY the JSON, no other text.`
 
     const patternBuffer = await sharp(req.file.buffer)
       .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
       .greyscale()
-      .normalise()               // stretch contrast to full range
-      .gamma(1.5)                // darken mid-tones to make lines more visible
-      .linear(2.0, -40)          // aggressive contrast boost
-      .threshold(thresholdVal)   // black lines on white background — NO negate
+      .normalise()
+      .gamma(1.5)
+      .linear(2.0, -40)
+      .threshold(thresholdVal)
       .png()
       .toBuffer();
 
     const patternB64 = patternBuffer.toString('base64');
+
     const originalResized = await sharp(req.file.buffer)
       .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .png()
       .toBuffer();
     const originalResizedB64 = originalResized.toString('base64');
 
