@@ -101,7 +101,7 @@ Return ONLY the JSON, no other text.`
       .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
       .greyscale()
       .normalise()               // stretch contrast to full range
-      .gamma(0.5)                // darken mid-tones to make lines more visible
+      .gamma(1.5)                // darken mid-tones to make lines more visible
       .linear(2.0, -40)          // aggressive contrast boost
       .threshold(thresholdVal)   // black lines on white background — NO negate
       .png()
