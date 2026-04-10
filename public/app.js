@@ -77,7 +77,7 @@ function showResult(data) {
   var pd = data.patternData;
 
   document.getElementById('patternPreviewImg').src = 'data:image/png;base64,' + data.patternImageB64;
-  document.getElementById('originalPreviewImg').src = 'data:image/jpeg;base64,' + data.originalImageB64;
+  document.getElementById('originalPreviewImg').src = 'data:image/png;base64,' + data.originalImageB64;
   document.getElementById('patternTitle').textContent = pd.title || 'My Pattern';
   document.getElementById('patternDesc').textContent = pd.description || '';
   document.getElementById('diffBadge').textContent = pd.difficulty || 'Beginner';
@@ -182,7 +182,7 @@ async function generatePatternPDF() {
 
   // Original image
   try {
-    var origImg = 'data:image/jpeg;base64,' + patternResult.originalImageB64;
+    var origImg = 'data:image/png;base64,' + patternResult.originalImageB64;
     doc.addImage(origImg, 'JPEG', 30, 48, 150, 110, undefined, 'MEDIUM');
   } catch(e) {}
 
