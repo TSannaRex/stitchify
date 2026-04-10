@@ -163,28 +163,8 @@ async function generatePatternPDF() {
   var pd = patternResult.patternData;
   var W = 210; var H = 297;
 
-  // Load and embed Poppins font
-  try {
-    var fontRes = await fetch('https://fonts.gstatic.com/s/poppins/v21/pxiEyp8kv8JHgFVrJJfecg.woff2');
-    if (fontRes.ok) {
-      var fontBuf = await fontRes.arrayBuffer();
-      var fontB64 = btoa(String.fromCharCode(...new Uint8Array(fontBuf)));
-      doc.addFileToVFS('Poppins-Regular.ttf', fontB64);
-      doc.addFont('Poppins-Regular.ttf', 'Poppins', 'normal');
-      var fontBoldRes = await fetch('https://fonts.gstatic.com/s/poppins/v21/pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2');
-      if (fontBoldRes.ok) {
-        var fontBoldBuf = await fontBoldRes.arrayBuffer();
-        var fontBoldB64 = btoa(String.fromCharCode(...new Uint8Array(fontBoldBuf)));
-        doc.addFileToVFS('Poppins-Bold.ttf', fontBoldB64);
-        doc.addFont('Poppins-Bold.ttf', 'Poppins', 'bold');
-      }
-    }
-  } catch(fontErr) {
-    console.log('Could not load Poppins, falling back to helvetica');
-  }
-
-  // Use Poppins if loaded, otherwise helvetica
-  var FONT = doc.getFontList()['Poppins'] ? 'Poppins' : 'helvetica';
+  // Use helvetica - clean and reliable for PDF
+  var FONT = 'helvetica';
 
   // ── PAGE 1: Cover / intro ──
   // Background
@@ -386,41 +366,43 @@ async function generatePatternPDF() {
 // ─── ZIP DOWNLOAD ─────────────────────────────────────────────────────────────
 async function downloadZip() {
   showLoading('Creating your pattern PDF...');
-
   try {
-    // Generate pattern PDF
-    var patternDoc = await generatePatternPDF();
-    var patternPdfBytes = patternDoc.output('arraybuffer');
+    updateLoading('Generating PDF with Poppins font...');
+    var pdfRes = await fetch('/api/generate-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patternData: patternResult.patternData,
+        patternImageB64: patternResult.patternImageB64,
+        originalImageB64: patternResult.originalImageB64
+      })
+    });
+    if (!pdfRes.ok) {
+      var errData = await pdfRes.json();
+      throw new Error(errData.error || 'PDF generation failed');
+    }
+    var patternPdfBytes = await pdfRes.arrayBuffer();
 
-    updateLoading('Fetching Beginner\'s Guide...');
-
-    // Fetch the hardcoded beginner's guide from server
+    updateLoading("Fetching Beginner's Guide...");
     var guideRes = await fetch('/beginners-guide.pdf');
-    if (!guideRes.ok) throw new Error('Could not load Beginner\'s Guide');
+    if (!guideRes.ok) throw new Error("Could not load Beginner's Guide");
     var guideBytes = await guideRes.arrayBuffer();
 
     updateLoading('Packaging your ZIP file...');
-
-    // Create ZIP
     var zip = new JSZip();
     var folderName = (patternResult.patternData.title || 'MyPattern').replace(/[^a-zA-Z0-9]/g, '_');
     var folder = zip.folder(folderName);
     folder.file(folderName + '_Pattern.pdf', patternPdfBytes);
     folder.file('Hand_Embroidery_Beginners_Guide.pdf', guideBytes);
-
     var zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
-
-    // Download
     var url = URL.createObjectURL(zipBlob);
     var a = document.createElement('a');
     a.href = url;
     a.download = folderName + '_EmbroideryPack.zip';
     a.click();
     URL.revokeObjectURL(url);
-
     hideLoading();
     confetti();
-
   } catch(e) {
     hideLoading();
     alert('Download failed: ' + e.message);
