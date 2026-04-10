@@ -64,52 +64,22 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     }
 
     const sensitivity = parseInt(req.body.sensitivity) || 128;
-    // Map sensitivity (50-220) to blur radius: higher sensitivity = less blur = more detail
-    // Lower blur = finer edges captured
-    const blurSigma = Math.max(0.3, 2.5 - ((sensitivity - 50) / 170) * 2.0);
 
-    // EDGE DETECTION approach: produces outlines only, not filled shapes
-    // 1. Flatten + resize
-    // 2. Greyscale
-    // 3. Create two versions: original and blurred
-    // 4. Subtract blurred from original (unsharp mask) = edges only
-    // 5. Normalise + threshold to get clean black lines on white
+    // Pattern processing: greyscale + gentle contrast boost + moderate threshold
+    // Goal: keep outlines of ALL elements visible without filling large areas solid black
+    // Higher sensitivity = lower threshold = more lines captured (more detail)
+    // Lower sensitivity = higher threshold = only strongest edges (cleaner, simpler)
+    const thresholdVal = Math.round(210 - ((sensitivity - 50) / 170) * 130);
 
-    const baseBuffer = await sharp(req.file.buffer)
+    const patternBuffer = await sharp(req.file.buffer)
       .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
       .greyscale()
-      .toBuffer();
-
-    const { width, height } = await sharp(baseBuffer).metadata();
-
-    // Blurred version for edge detection
-    const blurredBuffer = await sharp(baseBuffer)
-      .blur(blurSigma)
-      .toBuffer();
-
-    // Get raw pixel data for both
-    const baseRaw = await sharp(baseBuffer).raw().toBuffer();
-    const blurRaw = await sharp(blurredBuffer).raw().toBuffer();
-
-    // Edge = |original - blurred| * boost
-    const edgeRaw = Buffer.alloc(baseRaw.length);
-    for (let i = 0; i < baseRaw.length; i++) {
-      const diff = Math.abs(baseRaw[i] - blurRaw[i]);
-      edgeRaw[i] = Math.min(255, diff * 4); // boost edges
-    }
-
-    // Convert edges to black lines on white background
-    // Invert: edges are bright, we want them dark on white
-    const patternBuffer = await sharp(edgeRaw, {
-      raw: { width, height, channels: 1 }
-    })
       .normalise()
-      .negate()           // white bg, dark lines
-      .threshold(220)     // clean up noise, keep only real edges
+      .clahe({ width: 8, height: 8, maxSlope: 3 })  // adaptive contrast - preserves local detail
+      .threshold(thresholdVal)                        // black lines on white
       .png()
       .toBuffer();
-
     const originalResized = await sharp(req.file.buffer)
       .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
