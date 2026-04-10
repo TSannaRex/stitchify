@@ -118,7 +118,7 @@ function clipImageToCircle(dataUrl) {
   return new Promise(function(resolve, reject) {
     var img = new Image();
     img.onload = function() {
-      var size = Math.min(img.width, img.height);
+      var size = 600; // fixed square canvas
       var canvas = document.createElement('canvas');
       canvas.width = size;
       canvas.height = size;
@@ -126,15 +126,18 @@ function clipImageToCircle(dataUrl) {
       // White background
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, size, size);
-      // Clip to circle
+      // Clip to perfect circle
       ctx.beginPath();
       ctx.arc(size/2, size/2, size/2, 0, Math.PI * 2);
       ctx.closePath();
       ctx.clip();
-      // Draw image centered
-      var sx = (img.width - size) / 2;
-      var sy = (img.height - size) / 2;
-      ctx.drawImage(img, sx, sy, size, size, 0, 0, size, size);
+      // Draw image scaled to fill the square (cover, not contain) then centered
+      var scale = Math.max(size / img.width, size / img.height);
+      var drawW = img.width * scale;
+      var drawH = img.height * scale;
+      var drawX = (size - drawW) / 2;
+      var drawY = (size - drawH) / 2;
+      ctx.drawImage(img, drawX, drawY, drawW, drawH);
       resolve(canvas.toDataURL('image/png'));
     };
     img.onerror = reject;
@@ -160,6 +163,29 @@ async function generatePatternPDF() {
   var pd = patternResult.patternData;
   var W = 210; var H = 297;
 
+  // Load and embed Poppins font
+  try {
+    var fontRes = await fetch('https://fonts.gstatic.com/s/poppins/v21/pxiEyp8kv8JHgFVrJJfecg.woff2');
+    if (fontRes.ok) {
+      var fontBuf = await fontRes.arrayBuffer();
+      var fontB64 = btoa(String.fromCharCode(...new Uint8Array(fontBuf)));
+      doc.addFileToVFS('Poppins-Regular.ttf', fontB64);
+      doc.addFont('Poppins-Regular.ttf', 'Poppins', 'normal');
+      var fontBoldRes = await fetch('https://fonts.gstatic.com/s/poppins/v21/pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2');
+      if (fontBoldRes.ok) {
+        var fontBoldBuf = await fontBoldRes.arrayBuffer();
+        var fontBoldB64 = btoa(String.fromCharCode(...new Uint8Array(fontBoldBuf)));
+        doc.addFileToVFS('Poppins-Bold.ttf', fontBoldB64);
+        doc.addFont('Poppins-Bold.ttf', 'Poppins', 'bold');
+      }
+    }
+  } catch(fontErr) {
+    console.log('Could not load Poppins, falling back to helvetica');
+  }
+
+  // Use Poppins if loaded, otherwise helvetica
+  var FONT = doc.getFontList()['Poppins'] ? 'Poppins' : 'helvetica';
+
   // ── PAGE 1: Cover / intro ──
   // Background
   doc.setFillColor(250, 247, 244);
@@ -170,30 +196,30 @@ async function generatePatternPDF() {
   doc.rect(0, 0, W, 8, 'F');
 
   // Logo area
-  doc.setFont('helvetica', 'bold');
+  doc.setFont(FONT, 'bold');
   doc.setFontSize(28);
   doc.setTextColor(92, 122, 82);
   doc.text('Stitchify', W/2, 30, { align: 'center' });
 
-  doc.setFont('helvetica', 'normal');
+  doc.setFont(FONT, 'normal');
   doc.setFontSize(11);
   doc.setTextColor(122, 101, 88);
   doc.text('Hand Embroidery Pattern', W/2, 38, { align: 'center' });
 
-  // Original image
+  // Original image - maintain aspect ratio
   try {
     var origImg = 'data:image/png;base64,' + patternResult.originalImageB64;
-    doc.addImage(origImg, 'JPEG', 30, 48, 150, 110, undefined, 'MEDIUM');
+    doc.addImage(origImg, 'PNG', 30, 45, 150, 120, undefined, 'MEDIUM');
   } catch(e) {}
 
   // Title
-  doc.setFont('helvetica', 'bold');
+  doc.setFont(FONT, 'bold');
   doc.setFontSize(20);
   doc.setTextColor(45, 32, 24);
   doc.text(pd.title || 'My Embroidery Pattern', W/2, 172, { align: 'center' });
 
   // Description
-  doc.setFont('helvetica', 'normal');
+  doc.setFont(FONT, 'normal');
   doc.setFontSize(11);
   doc.setTextColor(122, 101, 88);
   var descLines = doc.splitTextToSize(pd.description || '', 150);
@@ -202,14 +228,14 @@ async function generatePatternPDF() {
   // Difficulty
   doc.setFillColor(237, 244, 234);
   doc.roundedRect(75, 192, 60, 10, 5, 5, 'F');
-  doc.setFont('helvetica', 'bold');
+  doc.setFont(FONT, 'bold');
   doc.setFontSize(10);
   doc.setTextColor(92, 122, 82);
   doc.text('Difficulty: ' + (pd.difficulty || 'Beginner'), W/2, 199, { align: 'center' });
 
   // DMC Colors
   var yc = 210;
-  doc.setFont('helvetica', 'bold');
+  doc.setFont(FONT, 'bold');
   doc.setFontSize(11);
   doc.setTextColor(45, 32, 24);
   doc.text('DMC Thread Colors', 24, yc);
@@ -227,11 +253,11 @@ async function generatePatternPDF() {
     doc.circle(x + 5, yc + 8, 5, 'F');
     doc.setDrawColor(180,180,180);
     doc.circle(x + 5, yc + 8, 5, 'S');
-    doc.setFont('helvetica', 'bold');
+    doc.setFont(FONT, 'bold');
     doc.setFontSize(9);
     doc.setTextColor(45,32,24);
     doc.text('DMC ' + c.code, x + 13, yc + 7);
-    doc.setFont('helvetica', 'normal');
+    doc.setFont(FONT, 'normal');
     doc.setFontSize(8);
     doc.setTextColor(122,101,88);
     doc.text(c.name, x + 13, yc + 12);
@@ -239,11 +265,11 @@ async function generatePatternPDF() {
 
   // Stitch suggestions
   var ys = yc + 26;
-  doc.setFont('helvetica', 'bold');
+  doc.setFont(FONT, 'bold');
   doc.setFontSize(11);
   doc.setTextColor(45,32,24);
   doc.text('Stitch Suggestions', 24, ys);
-  doc.setFont('helvetica', 'normal');
+  doc.setFont(FONT, 'normal');
   doc.setFontSize(10);
   doc.setTextColor(122,101,88);
   var tipLines = doc.splitTextToSize(pd.stitchSuggestions || '', 162);
@@ -272,17 +298,17 @@ async function generatePatternPDF() {
     doc.rect(0, 0, W, 8, 'F');
 
     // Header
-    doc.setFont('helvetica', 'bold');
+    doc.setFont(FONT, 'bold');
     doc.setFontSize(14);
     doc.setTextColor(92, 122, 82);
     doc.text('Stitchify', 24, 20);
-    doc.setFont('helvetica', 'normal');
+    doc.setFont(FONT, 'normal');
     doc.setFontSize(10);
     doc.setTextColor(122, 101, 88);
     doc.text(pd.title || 'My Pattern', 24, 27);
 
     // Hoop size label - right aligned
-    doc.setFont('helvetica', 'bold');
+    doc.setFont(FONT, 'bold');
     doc.setFontSize(16);
     doc.setTextColor(45, 32, 24);
     doc.text(hoop.label, W - 24, 22, { align: 'right' });
@@ -337,13 +363,13 @@ async function generatePatternPDF() {
     } catch(e) { console.error('Image clip error:', e); }
 
     // Hoop size label below
-    doc.setFont('helvetica', 'bold');
+    doc.setFont(FONT, 'bold');
     doc.setFontSize(11);
     doc.setTextColor(45, 32, 24);
     doc.text(hoop.label, cx2, cy2 + r + 14, { align: 'center' });
 
     // Print instruction
-    doc.setFont('helvetica', 'normal');
+    doc.setFont(FONT, 'normal');
     doc.setFontSize(8);
     doc.setTextColor(150, 130, 120);
     doc.text('Print on A4 — choose "Fit to Page". The hoop guide above is true to size.', cx2, H - 16, { align: 'center' });
