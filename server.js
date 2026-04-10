@@ -64,13 +64,51 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     }
 
     const sensitivity = parseInt(req.body.sensitivity) || 128;
-    const thresholdVal = Math.round(200 - ((sensitivity - 50) / 170) * 140);
+    // Map sensitivity (50-220) to blur radius: higher sensitivity = less blur = more detail
+    // Lower blur = finer edges captured
+    const blurSigma = Math.max(0.3, 2.5 - ((sensitivity - 50) / 170) * 2.0);
 
-    const patternBuffer = await sharp(req.file.buffer)
+    // EDGE DETECTION approach: produces outlines only, not filled shapes
+    // 1. Flatten + resize
+    // 2. Greyscale
+    // 3. Create two versions: original and blurred
+    // 4. Subtract blurred from original (unsharp mask) = edges only
+    // 5. Normalise + threshold to get clean black lines on white
+
+    const baseBuffer = await sharp(req.file.buffer)
       .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
-      .greyscale().normalise().gamma(1.5).linear(2.0, -40)
-      .threshold(thresholdVal).png().toBuffer();
+      .greyscale()
+      .toBuffer();
+
+    const { width, height } = await sharp(baseBuffer).metadata();
+
+    // Blurred version for edge detection
+    const blurredBuffer = await sharp(baseBuffer)
+      .blur(blurSigma)
+      .toBuffer();
+
+    // Get raw pixel data for both
+    const baseRaw = await sharp(baseBuffer).raw().toBuffer();
+    const blurRaw = await sharp(blurredBuffer).raw().toBuffer();
+
+    // Edge = |original - blurred| * boost
+    const edgeRaw = Buffer.alloc(baseRaw.length);
+    for (let i = 0; i < baseRaw.length; i++) {
+      const diff = Math.abs(baseRaw[i] - blurRaw[i]);
+      edgeRaw[i] = Math.min(255, diff * 4); // boost edges
+    }
+
+    // Convert edges to black lines on white background
+    // Invert: edges are bright, we want them dark on white
+    const patternBuffer = await sharp(edgeRaw, {
+      raw: { width, height, channels: 1 }
+    })
+      .normalise()
+      .negate()           // white bg, dark lines
+      .threshold(220)     // clean up noise, keep only real edges
+      .png()
+      .toBuffer();
 
     const originalResized = await sharp(req.file.buffer)
       .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
@@ -126,7 +164,7 @@ app.post('/api/generate-pdf', async (req, res) => {
         </div>
         <div class="hoop-footer">
           <p>Print on A4 — choose "Fit to Page". The hoop guide above is true to size.</p>
-          <p>For personal use only.</p>
+          <p>Happy stitching! 🧵 We hope you enjoy making this.</p>
         </div>
         <div class="page-bottom-bar"></div>
       </div>`;
@@ -184,7 +222,7 @@ app.post('/api/generate-pdf', async (req, res) => {
     <div class="section-title" style="margin-top:4mm">Stitch Suggestions</div>
     <div class="stitch-text">${pd.stitchSuggestions || ''}</div>
   </div>
-  <div class="cover-personal">This pattern is for personal use only. Please do not sell, distribute or share.</div>
+  <div class="cover-personal">Happy stitching! We hope you have so much fun bringing this pattern to life. 🧵</div>
   <div class="page-bottom-bar"></div>
 </div>
 ${hoopPages}
