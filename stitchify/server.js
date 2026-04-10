@@ -91,13 +91,18 @@ Return ONLY the JSON, no other text.`
       };
     }
 
-    // Step 3: Process image for pattern (high contrast edge effect)
+    // Step 3: Process image for pattern
+    // Get sensitivity from request (default 128), higher = more detail
+    const sensitivity = parseInt(req.body.sensitivity) || 128;
+    // We want: dark lines on white background
+    // threshold() makes pixels white if above threshold, black if below
+    // So: greyscale -> normalise -> linear boost contrast -> threshold (no negate)
     const patternBuffer = await sharp(req.file.buffer)
-      .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+      .resize(1000, 1000, { fit: 'inside', withoutEnlargement: true })
       .greyscale()
       .normalise()
-      .threshold(128)
-      .negate()
+      .linear(1.5, -(sensitivity - 128))  // boost contrast, shift by sensitivity
+      .threshold(sensitivity)              // white bg, black lines
       .png()
       .toBuffer();
 
