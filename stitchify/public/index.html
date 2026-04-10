@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stitchify – Turn Any Image Into an Embroidery Pattern</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo-wrap">
+        <span class="logo-icon">🪡</span>
+        <div>
+          <h1>Stitchify</h1>
+          <p>Turn any image into a hand embroidery pattern</p>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- STEP 1: UPLOAD -->
+    <section class="card" id="upload-section">
+      <div class="step-label">Step 1</div>
+      <h2>Upload Your Image</h2>
+      <p class="subtitle">Upload a JPG or PNG — a photo, illustration, or any design you'd love to stitch.</p>
+
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" accept="image/jpeg,image/png,image/jpg" onchange="handleFile(this)">
+        <div class="upload-inner" id="uploadInner" onclick="document.getElementById('fileInput').click()">
+          <div class="upload-icon">📁</div>
+          <p class="upload-text">Click to upload or drag & drop</p>
+          <p class="upload-hint">JPG or PNG, max 20MB</p>
+        </div>
+        <div class="preview-wrap" id="previewWrap" style="display:none">
+          <img id="previewImg" src="" alt="Preview">
+          <button class="change-btn" onclick="resetUpload()">✕ Change image</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 2: SETTINGS -->
+    <section class="card" id="settings-section">
+      <div class="step-label">Step 2</div>
+      <h2>Pattern Settings</h2>
+      <p class="subtitle">Adjust how your pattern looks.</p>
+
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label>Sensitivity</label>
+          <div class="slider-row">
+            <input type="range" id="sensitivity" min="50" max="220" value="128" oninput="document.getElementById('sensVal').textContent=this.value">
+            <span id="sensVal">128</span>
+          </div>
+          <p class="setting-hint">Higher = more detail captured</p>
+        </div>
+        <div class="setting-item">
+          <label>Line Thickness</label>
+          <div class="slider-row">
+            <input type="range" id="thickness" min="1" max="3" value="1" step="0.5" oninput="document.getElementById('thickVal').textContent=this.value+'px'">
+            <span id="thickVal">1px</span>
+          </div>
+          <p class="setting-hint">Thickness of the pattern lines</p>
+        </div>
+      </div>
+
+      <button class="primary-btn" id="convertBtn" onclick="convert()" disabled>
+        <span id="btnText">🪡 Generate Pattern</span>
+      </button>
+    </section>
+
+    <!-- STEP 3: RESULT -->
+    <section class="card result-card" id="result-section" style="display:none">
+      <div class="step-label">Step 3</div>
+      <h2>Your Pattern is Ready!</h2>
+
+      <div class="result-grid">
+        <!-- Preview -->
+        <div class="result-preview">
+          <div class="preview-tabs">
+            <button class="ptab active" onclick="switchPreview('pattern')">Pattern</button>
+            <button class="ptab" onclick="switchPreview('original')">Original</button>
+          </div>
+          <div class="hoop-preview-wrap">
+            <div class="hoop-circle">
+              <img id="patternPreviewImg" src="" alt="Pattern">
+              <img id="originalPreviewImg" src="" alt="Original" style="display:none">
+            </div>
+          </div>
+        </div>
+
+        <!-- Info -->
+        <div class="result-info">
+          <h3 id="patternTitle">My Pattern</h3>
+          <p id="patternDesc" class="pattern-desc"></p>
+
+          <div class="meta-row">
+            <span class="meta-label">Difficulty</span>
+            <span class="badge" id="diffBadge">Beginner</span>
+          </div>
+
+          <div class="colors-section">
+            <p class="colors-label">Suggested DMC Colors</p>
+            <div class="colors-grid" id="colorsGrid"></div>
+          </div>
+
+          <div class="stitch-tips">
+            <p class="colors-label">Stitch Suggestions</p>
+            <p id="stitchTips" class="tips-text"></p>
+          </div>
+
+          <button class="download-btn" id="downloadBtn" onclick="downloadZip()">
+            ⬇ Download Embroidery Pack (ZIP)
+          </button>
+          <p class="download-hint">Includes your pattern PDF (all 6 hoop sizes) + Beginner's Guide PDF</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <p>Made with 🪡 by Stitchify</p>
+  </footer>
+
+</div>
+
+<!-- LOADING OVERLAY -->
+<div class="loading-overlay" id="loadingOverlay" style="display:none">
+  <div class="loading-box">
+    <div class="loading-spinner"></div>
+    <p id="loadingText">Analysing your image...</p>
+  </div>
+</div>
+
+<!-- CONFETTI -->
+<div class="cf" id="cf"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
