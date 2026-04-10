@@ -190,23 +190,37 @@ app.post('/api/generate-pdf', async (req, res) => {
 ${hoopPages}
 </body></html>`;
 
-    const browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    });
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
-    const pdfBuffer = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: 0, right: 0, bottom: 0, left: 0 }
-    });
-    await browser.close();
-
-    res.set({ 'Content-Type': 'application/pdf', 'Content-Length': pdfBuffer.length });
-    res.send(pdfBuffer);
+    let browser = null;
+    try {
+      browser = await puppeteer.launch({
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(),
+        headless: chromium.headless,
+      });
+      const page = await browser.newPage();
+      // Reduce memory by blocking unnecessary resources
+      await page.setRequestInterception(true);
+      page.on('request', (req) => {
+        if (['image', 'stylesheet', 'font'].includes(req.resourceType()) && !req.url().includes('fonts.googleapis') && !req.url().includes('fonts.gstatic')) {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      // Wait a moment for fonts to load
+      await new Promise(r => setTimeout(r, 2000));
+      const pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: 0, right: 0, bottom: 0, left: 0 }
+      });
+      res.set({ 'Content-Type': 'application/pdf', 'Content-Length': pdfBuffer.length });
+      res.send(pdfBuffer);
+    } finally {
+      if (browser) await browser.close().catch(() => {});
+    }
 
   } catch (err) {
     console.error('PDF error:', err);
