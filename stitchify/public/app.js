@@ -113,6 +113,35 @@ function switchPreview(type) {
   }
 }
 
+// ─── CIRCLE CLIP HELPER ───────────────────────────────────────────────────────
+function clipImageToCircle(dataUrl) {
+  return new Promise(function(resolve, reject) {
+    var img = new Image();
+    img.onload = function() {
+      var size = Math.min(img.width, img.height);
+      var canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      var ctx = canvas.getContext('2d');
+      // White background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, size, size);
+      // Clip to circle
+      ctx.beginPath();
+      ctx.arc(size/2, size/2, size/2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      // Draw image centered
+      var sx = (img.width - size) / 2;
+      var sy = (img.height - size) / 2;
+      ctx.drawImage(img, sx, sy, size, size, 0, 0, size, size);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
 // ─── PDF GENERATION ───────────────────────────────────────────────────────────
 // A4 dimensions in mm: 210 x 297
 // Hoop sizes in mm (diameter)
@@ -296,14 +325,16 @@ async function generatePatternPDF() {
     doc.circle(cx2, cy2, r);
     doc.setLineDashPattern([], 0);
 
-    // Pattern image inside hoop - clip to circle area
-    var imgSize = (r - 2) * 2;
-    var imgX = cx2 - (imgSize / 2);
-    var imgY = cy2 - (imgSize / 2);
+    // Pattern image inside hoop - pre-clip to circle using canvas
     try {
-      var patImg = 'data:image/png;base64,' + patternResult.patternImageB64;
-      doc.addImage(patImg, 'PNG', imgX, imgY, imgSize, imgSize, undefined, 'FAST');
-    } catch(e) {}
+      var clippedDataUrl = await clipImageToCircle(
+        'data:image/png;base64,' + patternResult.patternImageB64
+      );
+      var imgSize = (r - 1) * 2;
+      var imgX = cx2 - (imgSize / 2);
+      var imgY = cy2 - (imgSize / 2);
+      doc.addImage(clippedDataUrl, 'PNG', imgX, imgY, imgSize, imgSize, undefined, 'FAST');
+    } catch(e) { console.error('Image clip error:', e); }
 
     // Hoop size label below
     doc.setFont('helvetica', 'bold');
