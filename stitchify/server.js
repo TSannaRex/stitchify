@@ -92,17 +92,18 @@ Return ONLY the JSON, no other text.`
     }
 
     // Step 3: Process image for pattern
-    // Get sensitivity from request (default 128), higher = more detail
+    // sensitivity slider: higher value = more detail (lower threshold = more dark pixels)
     const sensitivity = parseInt(req.body.sensitivity) || 128;
-    // We want: dark lines on white background
-    // threshold() makes pixels white if above threshold, black if below
-    // So: greyscale -> normalise -> linear boost contrast -> threshold (no negate)
+    // Map sensitivity (50-220) to threshold (200-60): more sensitivity = lower threshold = more lines
+    const thresholdVal = Math.round(200 - ((sensitivity - 50) / 170) * 140);
+
     const patternBuffer = await sharp(req.file.buffer)
-      .resize(1000, 1000, { fit: 'inside', withoutEnlargement: true })
+      .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
       .greyscale()
-      .normalise()
-      .linear(1.5, -(sensitivity - 128))  // boost contrast, shift by sensitivity
-      .threshold(sensitivity)              // white bg, black lines
+      .normalise()               // stretch contrast to full range
+      .gamma(0.5)                // darken mid-tones to make lines more visible
+      .linear(2.0, -40)          // aggressive contrast boost
+      .threshold(thresholdVal)   // black lines on white background — NO negate
       .png()
       .toBuffer();
 
