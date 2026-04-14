@@ -101,10 +101,30 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     // Kept small so thin details (hat texture, scarf folds) survive erosion.
     const erodeBlur = 0.8 + ((sensitivity - 50) / 170) * 1.2;
 
-    // Step A: greyscale + binary threshold -> solid black shapes on white
-    const binaryBuffer = await sharp(req.file.buffer)
+    // Step A: remove dark/black backgrounds, then greyscale + binary threshold.
+    // Many images have black or very dark backgrounds. We detect near-black pixels
+    // and replace them with white before processing, so the background does not
+    // swamp the foreground detail.
+    const { data: rawData, info: rawInfo } = await sharp(req.file.buffer)
       .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const channels = rawInfo.channels;
+    const cleanedData = Buffer.from(rawData);
+    for (let i = 0; i < cleanedData.length; i += channels) {
+      const r = cleanedData[i], g = cleanedData[i + 1], b = cleanedData[i + 2];
+      // If pixel is very dark (near-black background), replace with white
+      if (r < 40 && g < 40 && b < 40) {
+        cleanedData[i] = 255; cleanedData[i + 1] = 255; cleanedData[i + 2] = 255;
+        if (channels === 4) cleanedData[i + 3] = 255;
+      }
+    }
+
+    const binaryBuffer = await sharp(cleanedData, {
+        raw: { width: rawInfo.width, height: rawInfo.height, channels }
+      })
       .greyscale()
       .normalise()
       .threshold(binaryThreshold)
@@ -124,12 +144,20 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       .toBuffer();
 
     // Step C: difference blend -> outline ring only.
-    // normalise() stretches whatever grey values came out to full 0-255 range,
-    // then threshold(128) snaps everything to pure black or pure white.
-    const patternBuffer = await sharp(binaryBuffer)
+    // normalise() stretches output to full range, threshold(128) snaps to B&W.
+    // median() removes salt-and-pepper speckle noise from the hat/scarf texture.
+    // Final blur+threshold dilates lines slightly for bolder, cleaner strokes.
+    const diffBuffer = await sharp(binaryBuffer)
       .composite([{ input: erodedBuffer, blend: 'difference' }])
       .normalise()
       .threshold(128)
+      .median(3)
+      .png()
+      .toBuffer();
+
+    const patternBuffer = await sharp(diffBuffer)
+      .blur(0.6)
+      .threshold(100)
       .png()
       .toBuffer();
 
