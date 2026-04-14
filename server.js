@@ -33,7 +33,7 @@ app.post('/api/convert', upload.single('image'), async (req, res) => {
     const originalB64 = req.file.buffer.toString('base64');
     const originalMime = req.file.mimetype;
 
-    // ── 1. Gemini text analysis ──────────────────────────────────────────────
+    // 1. Gemini text analysis
     const response = await ai.models.generateContent({
       model: 'gemini-2.0-flash',
       contents: [{ role: 'user', parts: [
@@ -64,14 +64,14 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       };
     }
 
-    // ── 2. Gemini image generation — photo-realistic embroidery preview ───────
+    // 2. Gemini image generation - photo-realistic embroidery preview (best-effort)
     let embroideryPreviewB64 = null;
     try {
       const imgResponse = await ai.models.generateContent({
         model: 'gemini-2.0-flash-preview-image-generation',
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: originalMime, data: originalB64 } },
-          { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture — satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
+          { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture - satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
         ]}],
         generationConfig: { responseModalities: ['IMAGE'] },
       });
@@ -83,74 +83,47 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
         }
       }
     } catch (imgErr) {
-      // Image generation is best-effort — don't fail the whole request
       console.warn('Embroidery preview generation failed:', imgErr.message);
     }
 
-    // ── 3. Pattern processing — two-pass edge detection ──────────────────────
-    // Pass A: Laplacian edges  — catches colour/contrast boundaries everywhere
-    // Pass B: Dark-region edges — catches outlines of dark shapes (hat, scarf, bear body)
-    // Both emit white-on-black; merged with 'add' blend then inverted to black-on-white.
+    // 3. Pattern processing - morphological outline extraction
+    //
+    // Technique: threshold to binary, erode inward, subtract = outline only.
+    // No solid fills. Works for colour photos and black-on-white illustrations.
+    //
+    // sensitivity slider: higher = lower binaryThreshold = catches subtler darks
     const sensitivity = parseInt(req.body.sensitivity) || 128;
 
-    // sensitivity 50→220: edgeThreshold 80→10, darkThreshold 210→120
-    const edgeThreshold = Math.round(80 - ((sensitivity - 50) / 170) * 70);
-    const darkThreshold = Math.round(210 - ((sensitivity - 50) / 170) * 90);
+    // sensitivity 50-220 maps binaryThreshold 200-80
+    const binaryThreshold = Math.round(200 - ((sensitivity - 50) / 170) * 120);
 
-    // Shared greyscale base
-    const baseBuffer = await sharp(req.file.buffer)
+    // sensitivity 50-220 maps erodeBlur 1.5-3.5 (controls line thickness)
+    const erodeBlur = 1.5 + ((sensitivity - 50) / 170) * 2;
+
+    // Step A: greyscale + binary threshold -> solid black shapes on white
+    const binaryBuffer = await sharp(req.file.buffer)
       .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
       .greyscale()
       .normalise()
+      .threshold(binaryThreshold)
       .png()
       .toBuffer();
 
-    // Pass A: Laplacian edge detection (white edges on black)
-    const edgePass = await sharp(baseBuffer)
-      .blur(0.8)
-      .convolve({
-        width: 3,
-        height: 3,
-        kernel: [-1, -1, -1,
-                 -1,  8, -1,
-                 -1, -1, -1],
-        scale: 1,
-        offset: 0
-      })
-      .normalise()
-      .threshold(edgeThreshold)
-      .blur(0.5)
-      .threshold(80)
-      .png()
-      .toBuffer();
-
-    // Pass B: dark-region outlines (white edges on black)
-    const darkPass = await sharp(baseBuffer)
-      .blur(0.5)
-      .threshold(darkThreshold)
+    // Step B: erode - shrink the black shapes inward
+    // Invert so black becomes white, blur expands white (= shrinks black),
+    // re-threshold to clean up, invert back to black shapes (now smaller).
+    const erodedBuffer = await sharp(binaryBuffer)
       .negate()
-      .convolve({
-        width: 3,
-        height: 3,
-        kernel: [-1, -1, -1,
-                 -1,  8, -1,
-                 -1, -1, -1],
-        scale: 1,
-        offset: 0
-      })
-      .normalise()
-      .threshold(edgeThreshold)
-      .blur(0.5)
-      .threshold(80)
+      .blur(erodeBlur)
+      .threshold(40)
+      .negate()
       .png()
       .toBuffer();
 
-    // Merge both passes then invert to black lines on white
-    const patternBuffer = await sharp(edgePass)
-      .composite([{ input: darkPass, blend: 'add' }])
-      .threshold(10)
-      .negate()
+    // Step C: difference blend - original minus eroded = outline ring only
+    const patternBuffer = await sharp(binaryBuffer)
+      .composite([{ input: erodedBuffer, blend: 'difference' }])
       .png()
       .toBuffer();
 
@@ -163,7 +136,7 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       patternData,
       patternImageB64:     patternBuffer.toString('base64'),
       originalImageB64:    originalResized.toString('base64'),
-      embroideryPreviewB64,                  // null if generation failed
+      embroideryPreviewB64,
     });
 
   } catch (err) {
@@ -208,8 +181,8 @@ app.post('/api/generate-pdf', async (req, res) => {
           <div class="hoop-label">${h.label}</div>
         </div>
         <div class="hoop-footer">
-          <p>Print on A4 — choose "Fit to Page". The hoop guide above is true to size.</p>
-          <p>Happy stitching! 🧵 We hope you enjoy making this.</p>
+          <p>Print on A4 - choose "Fit to Page". The hoop guide above is true to size.</p>
+          <p>Happy stitching! We hope you enjoy making this.</p>
         </div>
         <div class="page-bottom-bar"></div>
       </div>`;
@@ -267,7 +240,7 @@ app.post('/api/generate-pdf', async (req, res) => {
     <div class="section-title" style="margin-top:4mm">Stitch Suggestions</div>
     <div class="stitch-text">${pd.stitchSuggestions || ''}</div>
   </div>
-  <div class="cover-personal">Happy stitching! We hope you have so much fun bringing this pattern to life. 🧵</div>
+  <div class="cover-personal">Happy stitching! We hope you have so much fun bringing this pattern to life.</div>
   <div class="page-bottom-bar"></div>
 </div>
 ${hoopPages}
