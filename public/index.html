@@ -86,13 +86,15 @@
         <!-- Preview -->
         <div class="result-preview">
           <div class="preview-tabs">
-            <button class="ptab active" onclick="switchPreview('pattern')">Pattern</button>
-            <button class="ptab" onclick="switchPreview('original')">Original</button>
+            <button class="ptab active" data-type="pattern"    onclick="switchPreview('pattern', event)">Pattern</button>
+            <button class="ptab"        data-type="original"   onclick="switchPreview('original', event)">Original</button>
+            <button class="ptab"        data-type="embroidery" id="embroideryTab" onclick="switchPreview('embroidery', event)" style="display:none">✨ Embroidered</button>
           </div>
           <div class="hoop-preview-wrap">
             <div class="hoop-circle">
-              <img id="patternPreviewImg" src="" alt="Pattern">
-              <img id="originalPreviewImg" src="" alt="Original" style="display:none">
+              <img id="patternPreviewImg"    src="" alt="Pattern">
+              <img id="originalPreviewImg"   src="" alt="Original"   style="display:none">
+              <img id="embroideryPreviewImg" src="" alt="Embroidered" style="display:none">
             </div>
           </div>
         </div>
