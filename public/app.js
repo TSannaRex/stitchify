@@ -342,7 +342,8 @@ async function downloadZip() {
       body: JSON.stringify({
         patternData: patternResult.patternData,
         patternImageB64: patternResult.patternImageB64,
-        originalImageB64: patternResult.originalImageB64
+        originalImageB64: patternResult.originalImageB64,
+        embroideryPreviewB64: patternResult.embroideryPreviewB64
       })
     });
     if (!pdfRes.ok) {
