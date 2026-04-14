@@ -200,7 +200,7 @@ app.post('/api/generate-pdf', async (req, res) => {
 .cover { align-items:center; }
 .cover-brand { font-size:26pt; font-weight:700; color:#5c7a52; margin:6mm 0 2mm; }
 .cover-sub { font-size:10pt; color:#7a6558; margin-bottom:5mm; }
-.cover-img { width:150mm; height:115mm; object-fit:contain; border-radius:3mm; margin-bottom:5mm; background:#fff; }
+.cover-img { width:170mm; height:170mm; object-fit:cover; border-radius:4mm; margin-bottom:5mm; background:#fff; }
 .cover-title { font-size:18pt; font-weight:700; color:#2d2018; margin-bottom:3mm; text-align:center; padding:0 15mm; }
 .cover-desc { font-size:10pt; color:#7a6558; text-align:center; padding:0 18mm; margin-bottom:4mm; line-height:1.6; }
 .cover-badge { background:#edf4ea; color:#5c7a52; font-size:9pt; font-weight:600; padding:2mm 6mm; border-radius:10mm; margin-bottom:5mm; }
@@ -247,10 +247,10 @@ app.post('/api/generate-pdf', async (req, res) => {
 ${hoopPages}
 <div class="page cover">
   <div class="page-top-bar"></div>
-  <div class="cover-brand" style="font-size:18pt;margin-top:8mm">Original Image</div>
-  <div class="cover-sub">Your source image for reference</div>
-  <img class="cover-img" src="${origSrc}" style="width:160mm;height:140mm;margin-top:4mm">
-  <div class="cover-personal" style="margin-top:auto">Use this page as a colour reference while you stitch. 🧵</div>
+  <div class="cover-brand" style="font-size:18pt;margin-top:8mm">Colour Reference</div>
+  <div class="cover-sub">Use this page to guide your thread colour choices while you stitch</div>
+  <img class="cover-img" src="${origSrc}" style="width:170mm;height:170mm;margin-top:6mm;object-fit:contain;">
+  <div class="cover-personal" style="margin-top:auto">Happy stitching! 🧵</div>
   <div class="page-bottom-bar"></div>
 </div>
 </body></html>`;
