@@ -97,8 +97,9 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     // sensitivity 50-220 maps binaryThreshold 200-80
     const binaryThreshold = Math.round(200 - ((sensitivity - 50) / 170) * 120);
 
-    // sensitivity 50-220 maps erodeBlur 1.5-3.5 (controls line thickness)
-    const erodeBlur = 1.5 + ((sensitivity - 50) / 170) * 2;
+    // sensitivity 50-220 maps erodeBlur 0.8-2.0 (controls line thickness)
+    // Kept small so thin details (hat texture, scarf folds) survive erosion.
+    const erodeBlur = 0.8 + ((sensitivity - 50) / 170) * 1.2;
 
     // Step A: greyscale + binary threshold -> solid black shapes on white
     const binaryBuffer = await sharp(req.file.buffer)
@@ -110,20 +111,23 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       .png()
       .toBuffer();
 
-    // Step B: erode - shrink the black shapes inward
-    // Invert so black becomes white, blur expands white (= shrinks black),
-    // re-threshold to clean up, invert back to black shapes (now smaller).
+    // Step B: erode - shrink the black shapes inward.
+    // Higher threshold (128) on re-binarise keeps the eroded version
+    // cleanly binary so the difference step gives pure black not grey.
+    // Smaller erodeBlur preserves thin strokes (hat texture, scarf folds).
     const erodedBuffer = await sharp(binaryBuffer)
       .negate()
       .blur(erodeBlur)
-      .threshold(40)
+      .threshold(128)
       .negate()
       .png()
       .toBuffer();
 
-    // Step C: difference blend - original minus eroded = outline ring only
+    // Step C: difference blend -> outline ring only, then threshold to
+    // force pure black lines (eliminates any grey anti-aliasing artefacts).
     const patternBuffer = await sharp(binaryBuffer)
       .composite([{ input: erodedBuffer, blend: 'difference' }])
+      .threshold(10)
       .png()
       .toBuffer();
 
