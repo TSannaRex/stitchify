@@ -33,8 +33,9 @@ app.post('/api/convert', upload.single('image'), async (req, res) => {
     const originalB64 = req.file.buffer.toString('base64');
     const originalMime = req.file.mimetype;
 
+    // ── 1. Gemini text analysis ──────────────────────────────────────────────
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-2.0-flash',
       contents: [{ role: 'user', parts: [
         { inlineData: { mimeType: originalMime, data: originalB64 } },
         { text: `You are an expert embroidery pattern designer. Analyse this image carefully.
@@ -63,23 +64,58 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       };
     }
 
+    // ── 2. Gemini image generation — photo-realistic embroidery preview ───────
+    let embroideryPreviewB64 = null;
+    try {
+      const imgResponse = await ai.models.generateContent({
+        model: 'gemini-2.0-flash-preview-image-generation',
+        contents: [{ role: 'user', parts: [
+          { inlineData: { mimeType: originalMime, data: originalB64 } },
+          { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture — satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
+        ]}],
+        generationConfig: { responseModalities: ['IMAGE'] },
+      });
+
+      for (const part of imgResponse.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData?.mimeType?.startsWith('image/')) {
+          embroideryPreviewB64 = part.inlineData.data;
+          break;
+        }
+      }
+    } catch (imgErr) {
+      // Image generation is best-effort — don't fail the whole request
+      console.warn('Embroidery preview generation failed:', imgErr.message);
+    }
+
+    // ── 3. Pattern processing — edge detection (outline/sketch style) ─────────
+    // Laplacian convolution detects colour/brightness boundaries.
+    // Result: thin black lines on white — coloring-book style, no solid fills.
     const sensitivity = parseInt(req.body.sensitivity) || 128;
 
-    // Pattern processing: greyscale + gentle contrast boost + moderate threshold
-    // Goal: keep outlines of ALL elements visible without filling large areas solid black
-    // Higher sensitivity = lower threshold = more lines captured (more detail)
-    // Lower sensitivity = higher threshold = only strongest edges (cleaner, simpler)
-    const thresholdVal = Math.round(210 - ((sensitivity - 50) / 170) * 130);
+    // Higher sensitivity → lower threshold → capture more/finer edges
+    // Lower sensitivity  → higher threshold → only strong/bold edges
+    const thresholdVal = Math.round(20 + ((220 - sensitivity) / 170) * 60);
 
     const patternBuffer = await sharp(req.file.buffer)
       .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
       .greyscale()
       .normalise()
-      .clahe({ width: 8, height: 8, maxSlope: 3 })  // adaptive contrast - preserves local detail
-      .threshold(thresholdVal)                        // black lines on white
+      .blur(1.5)                              // smooth noise before edge detection
+      .convolve({
+        width: 3,
+        height: 3,
+        kernel: [-1, -1, -1,
+                 -1,  8, -1,
+                 -1, -1, -1],                // Laplacian — finds colour boundaries
+        scale: 1,
+        offset: 0
+      })
+      .threshold(thresholdVal)               // only keep strong edges
+      .negate()                              // invert → black lines on white bg
       .png()
       .toBuffer();
+
     const originalResized = await sharp(req.file.buffer)
       .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
@@ -87,8 +123,9 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
 
     res.json({
       patternData,
-      patternImageB64: patternBuffer.toString('base64'),
-      originalImageB64: originalResized.toString('base64'),
+      patternImageB64:     patternBuffer.toString('base64'),
+      originalImageB64:    originalResized.toString('base64'),
+      embroideryPreviewB64,                  // null if generation failed
     });
 
   } catch (err) {
@@ -207,7 +244,6 @@ ${hoopPages}
         headless: chromium.headless,
       });
       const page = await browser.newPage();
-      // Reduce memory by blocking unnecessary resources
       await page.setRequestInterception(true);
       page.on('request', (req) => {
         if (['image', 'stylesheet', 'font'].includes(req.resourceType()) && !req.url().includes('fonts.googleapis') && !req.url().includes('fonts.gstatic')) {
@@ -217,7 +253,6 @@ ${hoopPages}
         }
       });
       await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      // Wait a moment for fonts to load
       await new Promise(r => setTimeout(r, 2000));
       const pdfBuffer = await page.pdf({
         format: 'A4',
