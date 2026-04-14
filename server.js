@@ -95,7 +95,7 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
         model: 'gemini-2.0-flash-preview-image-generation',
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: originalMime, data: originalB64 } },
-          { text: `Convert this image into a clean coloring book page. Output ONLY black outlines on a pure white background. No fills, no shading, no grey areas. Every element from the original should be represented as clean black outlines only — like a professional hand embroidery pattern. Include all details: text, characters, decorative elements. White background, black lines only.` }
+          { text: `Transform this image into a hand embroidery pattern. Rules: (1) Pure white background only. (2) All shapes drawn as thin black outline strokes only — absolutely no filled areas, no solid black regions, no grey shading. (3) The hat, scarf, and all dark areas must be outlines only — imagine drawing just the edge of each shape with a fine black pen, never filling it in. (4) Include all text and decorative details as outlines. (5) Style: clean coloring book line art, like the highland cow embroidery patterns sold on Etsy. Every area that would be coloured or dark in the original must become an empty outlined shape instead.` }
         ]}],
         generationConfig: { responseModalities: ['IMAGE'] },
       });
