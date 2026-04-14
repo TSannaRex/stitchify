@@ -87,41 +87,70 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       console.warn('Embroidery preview generation failed:', imgErr.message);
     }
 
-    // ── 3. Pattern processing — edge detection (outline/sketch style) ─────────
-    // Strategy:
-    //   a) Blur to reduce noise
-    //   b) Laplacian convolution to find colour/brightness boundaries
-    //   c) Normalise so the strongest edges always reach full black
-    //   d) Low threshold so subtle edges (fur, face details) survive
-    //   e) Dilate (blur then re-threshold) to fatten thin lines so they print clearly
-    //   f) Negate → black lines on white background
+    // ── 3. Pattern processing — two-pass edge detection ──────────────────────
+    // Pass A: Laplacian edges  — catches colour/contrast boundaries everywhere
+    // Pass B: Dark-region edges — catches outlines of dark shapes (hat, scarf, bear body)
+    // Both emit white-on-black; merged with 'add' blend then inverted to black-on-white.
     const sensitivity = parseInt(req.body.sensitivity) || 128;
 
-    // Higher sensitivity → lower threshold → more / finer edges captured
-    // Lower sensitivity  → higher threshold → only bold edges survive
-    // Range: sensitivity 50→220 maps threshold 60→5
-    const thresholdVal = Math.round(60 - ((sensitivity - 50) / 170) * 55);
+    // sensitivity 50→220: edgeThreshold 80→10, darkThreshold 210→120
+    const edgeThreshold = Math.round(80 - ((sensitivity - 50) / 170) * 70);
+    const darkThreshold = Math.round(210 - ((sensitivity - 50) / 170) * 90);
 
-    const patternBuffer = await sharp(req.file.buffer)
+    // Shared greyscale base
+    const baseBuffer = await sharp(req.file.buffer)
       .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
       .greyscale()
       .normalise()
-      .blur(1)                               // mild denoise before convolution
+      .png()
+      .toBuffer();
+
+    // Pass A: Laplacian edge detection (white edges on black)
+    const edgePass = await sharp(baseBuffer)
+      .blur(0.8)
       .convolve({
         width: 3,
         height: 3,
         kernel: [-1, -1, -1,
                  -1,  8, -1,
-                 -1, -1, -1],               // Laplacian — finds colour boundaries
+                 -1, -1, -1],
         scale: 1,
         offset: 0
       })
-      .normalise()                           // stretch edge map so max = 255 (full black)
-      .threshold(thresholdVal)              // keep edges above threshold
-      .blur(0.6)                             // dilate: slightly fatten the lines
-      .threshold(100)                        // re-sharpen after dilation
-      .negate()                              // invert → black lines on white bg
+      .normalise()
+      .threshold(edgeThreshold)
+      .blur(0.5)
+      .threshold(80)
+      .png()
+      .toBuffer();
+
+    // Pass B: dark-region outlines (white edges on black)
+    const darkPass = await sharp(baseBuffer)
+      .blur(0.5)
+      .threshold(darkThreshold)
+      .negate()
+      .convolve({
+        width: 3,
+        height: 3,
+        kernel: [-1, -1, -1,
+                 -1,  8, -1,
+                 -1, -1, -1],
+        scale: 1,
+        offset: 0
+      })
+      .normalise()
+      .threshold(edgeThreshold)
+      .blur(0.5)
+      .threshold(80)
+      .png()
+      .toBuffer();
+
+    // Merge both passes then invert to black lines on white
+    const patternBuffer = await sharp(edgePass)
+      .composite([{ input: darkPass, blend: 'add' }])
+      .threshold(10)
+      .negate()
       .png()
       .toBuffer();
 
