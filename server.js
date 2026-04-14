@@ -198,23 +198,23 @@ app.post('/api/generate-pdf', async (req, res) => {
 .page-top-bar { height:8mm; background:#5c7a52; flex-shrink:0; }
 .page-bottom-bar { height:6mm; background:#5c7a52; flex-shrink:0; }
 .cover { align-items:center; }
-.cover-brand { font-size:26pt; font-weight:700; color:#5c7a52; margin:6mm 0 2mm; }
-.cover-sub { font-size:10pt; color:#7a6558; margin-bottom:5mm; }
-.cover-img { width:170mm; height:170mm; object-fit:cover; border-radius:4mm; margin-bottom:5mm; background:#fff; }
-.cover-title { font-size:18pt; font-weight:700; color:#2d2018; margin-bottom:3mm; text-align:center; padding:0 15mm; }
-.cover-desc { font-size:10pt; color:#7a6558; text-align:center; padding:0 18mm; margin-bottom:4mm; line-height:1.6; }
-.cover-badge { background:#edf4ea; color:#5c7a52; font-size:9pt; font-weight:600; padding:2mm 6mm; border-radius:10mm; margin-bottom:5mm; }
-.colors-section { width:100%; padding:0 14mm; margin-bottom:4mm; }
-.section-title { font-size:10pt; font-weight:700; color:#2d2018; margin-bottom:3mm; }
+.cover-brand { font-size:22pt; font-weight:700; color:#5c7a52; margin:4mm 0 1mm; }
+.cover-sub { font-size:9pt; color:#7a6558; margin-bottom:3mm; }
+.cover-img { width:130mm; height:130mm; object-fit:cover; border-radius:4mm; margin-bottom:3mm; background:#fff; }
+.cover-title { font-size:15pt; font-weight:700; color:#2d2018; margin-bottom:2mm; text-align:center; padding:0 15mm; }
+.cover-desc { font-size:9pt; color:#7a6558; text-align:center; padding:0 18mm; margin-bottom:2mm; line-height:1.5; }
+.cover-badge { background:#edf4ea; color:#5c7a52; font-size:8pt; font-weight:600; padding:1.5mm 5mm; border-radius:10mm; margin-bottom:3mm; }
+.colors-section { width:100%; padding:0 14mm; margin-bottom:2mm; }
+.section-title { font-size:9pt; font-weight:700; color:#2d2018; margin-bottom:2mm; }
 .colors-grid { display:flex; flex-wrap:wrap; gap:2mm; }
-.color-chip { display:flex; align-items:center; gap:2mm; background:#f5efe8; border-radius:10mm; padding:2mm 3mm; }
+.color-chip { display:flex; align-items:center; gap:2mm; background:#f5efe8; border-radius:10mm; padding:1.5mm 3mm; }
 .swatch { width:7mm; height:7mm; border-radius:50%; border:0.3mm solid rgba(0,0,0,0.12); flex-shrink:0; }
 .color-info { display:flex; flex-direction:column; }
 .color-code { font-size:8pt; font-weight:600; color:#2d2018; }
 .color-name { font-size:7pt; color:#7a6558; }
 .stitch-section { width:100%; padding:0 14mm; }
-.stitch-text { font-size:9pt; color:#7a6558; line-height:1.6; }
-.cover-personal { font-size:7pt; color:#c0a898; text-align:center; margin:auto 0 3mm; }
+.stitch-text { font-size:8pt; color:#7a6558; line-height:1.5; }
+.cover-personal { font-size:7pt; color:#c0a898; text-align:center; margin:2mm 0 2mm; }
 .hoop-header { display:flex; justify-content:space-between; align-items:flex-start; padding:5mm 14mm 3mm; }
 .hoop-brand { font-size:12pt; font-weight:700; color:#5c7a52; display:flex; flex-direction:column; }
 .hoop-subtitle { font-size:9pt; font-weight:400; color:#7a6558; }
@@ -238,7 +238,7 @@ app.post('/api/generate-pdf', async (req, res) => {
     <div class="colors-grid">${colorsHtml}</div>
   </div>
   <div class="stitch-section">
-    <div class="section-title" style="margin-top:4mm">Stitch Suggestions</div>
+    <div class="section-title" style="margin-top:2mm">Stitch Suggestions</div>
     <div class="stitch-text">${pd.stitchSuggestions || ''}</div>
   </div>
   <div class="cover-personal">Happy stitching! We hope you have so much fun bringing this pattern to life.</div>
