@@ -68,7 +68,7 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     let embroideryPreviewB64 = null;
     try {
       const imgResponse = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-preview-image-generation',
+        model: 'gemini-3-flash-preview-image-generation',
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: originalMime, data: originalB64 } },
           { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture - satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
@@ -86,18 +86,17 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       console.warn('Embroidery preview generation failed:', imgErr.message);
     }
 
-    // 3. Pattern processing - ask Gemini to generate a coloring page version
-    // This gives clean outlines identical to a professional embroidery pattern,
-    // handling colour photos, illustrations, and black-on-white images equally well.
+    // 3. Pattern processing - ask Gemini to generate a coloring page version.
+    // gemini-3-flash-preview-image-generation supports image input + image output.
     let patternImageB64 = null;
     try {
       const patternResponse = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-preview-image-generation',
+        model: 'gemini-3-flash-preview-image-generation',
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: originalMime, data: originalB64 } },
-          { text: `Transform this image into a hand embroidery pattern. Rules: (1) Pure white background only. (2) All shapes drawn as thin black outline strokes only — absolutely no filled areas, no solid black regions, no grey shading. (3) The hat, scarf, and all dark areas must be outlines only — imagine drawing just the edge of each shape with a fine black pen, never filling it in. (4) Include all text and decorative details as outlines. (5) Style: clean coloring book line art, like the highland cow embroidery patterns sold on Etsy. Every area that would be coloured or dark in the original must become an empty outlined shape instead.` }
+          { text: 'Turn this into a coloring page. White background, black outlines only, no fills, no shading.' }
         ]}],
-        generationConfig: { responseModalities: ['IMAGE'] },
+        generationConfig: { responseModalities: ['Text', 'Image'] },
       });
 
       for (const part of patternResponse.candidates?.[0]?.content?.parts || []) {
@@ -106,6 +105,7 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
           break;
         }
       }
+      if (!patternImageB64) console.warn('Pattern gen: no image part in response');
     } catch (patErr) {
       console.warn('Pattern generation failed, falling back to Sharp:', patErr.message);
     }
