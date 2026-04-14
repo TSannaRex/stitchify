@@ -147,9 +147,10 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
 
 app.post('/api/generate-pdf', async (req, res) => {
   try {
-    const { patternData: pd, patternImageB64, originalImageB64 } = req.body;
-    const origSrc = 'data:image/png;base64,' + originalImageB64;
-    const patSrc  = 'data:image/png;base64,' + patternImageB64;
+    const { patternData: pd, patternImageB64, originalImageB64, embroideryPreviewB64 } = req.body;
+    const origSrc  = 'data:image/png;base64,' + originalImageB64;
+    const patSrc   = 'data:image/png;base64,' + patternImageB64;
+    const embSrc   = embroideryPreviewB64 ? 'data:image/png;base64,' + embroideryPreviewB64 : origSrc;
 
     const colorsHtml = (pd.dmcColors || []).map(c => `
       <div class="color-chip">
@@ -228,7 +229,7 @@ app.post('/api/generate-pdf', async (req, res) => {
   <div class="page-top-bar"></div>
   <div class="cover-brand">Stitchify</div>
   <div class="cover-sub">Hand Embroidery Pattern</div>
-  <img class="cover-img" src="${origSrc}">
+  <img class="cover-img" src="${embSrc}">
   <div class="cover-title">${pd.title || 'My Embroidery Pattern'}</div>
   <div class="cover-desc">${pd.description || ''}</div>
   <div class="cover-badge">Difficulty: ${pd.difficulty || 'Beginner'}</div>
@@ -244,6 +245,14 @@ app.post('/api/generate-pdf', async (req, res) => {
   <div class="page-bottom-bar"></div>
 </div>
 ${hoopPages}
+<div class="page cover">
+  <div class="page-top-bar"></div>
+  <div class="cover-brand" style="font-size:18pt;margin-top:8mm">Original Image</div>
+  <div class="cover-sub">Your source image for reference</div>
+  <img class="cover-img" src="${origSrc}" style="width:160mm;height:140mm;margin-top:4mm">
+  <div class="cover-personal" style="margin-top:auto">Use this page as a colour reference while you stitch. 🧵</div>
+  <div class="page-bottom-bar"></div>
+</div>
 </body></html>`;
 
     let browser = null;
