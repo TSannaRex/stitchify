@@ -123,11 +123,13 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       .png()
       .toBuffer();
 
-    // Step C: difference blend -> outline ring only, then threshold to
-    // force pure black lines (eliminates any grey anti-aliasing artefacts).
+    // Step C: difference blend -> outline ring only.
+    // normalise() stretches whatever grey values came out to full 0-255 range,
+    // then threshold(128) snaps everything to pure black or pure white.
     const patternBuffer = await sharp(binaryBuffer)
       .composite([{ input: erodedBuffer, blend: 'difference' }])
-      .threshold(10)
+      .normalise()
+      .threshold(128)
       .png()
       .toBuffer();
 
