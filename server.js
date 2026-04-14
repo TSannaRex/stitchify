@@ -88,30 +88,39 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     }
 
     // ── 3. Pattern processing — edge detection (outline/sketch style) ─────────
-    // Laplacian convolution detects colour/brightness boundaries.
-    // Result: thin black lines on white — coloring-book style, no solid fills.
+    // Strategy:
+    //   a) Blur to reduce noise
+    //   b) Laplacian convolution to find colour/brightness boundaries
+    //   c) Normalise so the strongest edges always reach full black
+    //   d) Low threshold so subtle edges (fur, face details) survive
+    //   e) Dilate (blur then re-threshold) to fatten thin lines so they print clearly
+    //   f) Negate → black lines on white background
     const sensitivity = parseInt(req.body.sensitivity) || 128;
 
-    // Higher sensitivity → lower threshold → capture more/finer edges
-    // Lower sensitivity  → higher threshold → only strong/bold edges
-    const thresholdVal = Math.round(20 + ((220 - sensitivity) / 170) * 60);
+    // Higher sensitivity → lower threshold → more / finer edges captured
+    // Lower sensitivity  → higher threshold → only bold edges survive
+    // Range: sensitivity 50→220 maps threshold 60→5
+    const thresholdVal = Math.round(60 - ((sensitivity - 50) / 170) * 55);
 
     const patternBuffer = await sharp(req.file.buffer)
       .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
       .greyscale()
       .normalise()
-      .blur(1.5)                              // smooth noise before edge detection
+      .blur(1)                               // mild denoise before convolution
       .convolve({
         width: 3,
         height: 3,
         kernel: [-1, -1, -1,
                  -1,  8, -1,
-                 -1, -1, -1],                // Laplacian — finds colour boundaries
+                 -1, -1, -1],               // Laplacian — finds colour boundaries
         scale: 1,
         offset: 0
       })
-      .threshold(thresholdVal)               // only keep strong edges
+      .normalise()                           // stretch edge map so max = 255 (full black)
+      .threshold(thresholdVal)              // keep edges above threshold
+      .blur(0.6)                             // dilate: slightly fatten the lines
+      .threshold(100)                        // re-sharpen after dilation
       .negate()                              // invert → black lines on white bg
       .png()
       .toBuffer();
