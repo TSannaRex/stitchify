@@ -68,7 +68,7 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     let embroideryPreviewB64 = null;
     try {
       const imgResponse = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview-image-generation',
+        model: 'gemini-3.1-flash-image-preview',
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: originalMime, data: originalB64 } },
           { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture - satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
@@ -87,16 +87,16 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     }
 
     // 3. Pattern processing - ask Gemini to generate a coloring page version.
-    // gemini-3-flash-preview-image-generation supports image input + image output.
+    // gemini-3.1-flash-image-preview supports image input + image output.
     let patternImageB64 = null;
     try {
       const patternResponse = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview-image-generation',
+        model: 'gemini-3.1-flash-image-preview',
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: originalMime, data: originalB64 } },
           { text: 'Turn this into a coloring page. White background, black outlines only, no fills, no shading.' }
         ]}],
-        generationConfig: { responseModalities: ['Text', 'Image'] },
+        generationConfig: { responseModalities: ['IMAGE'] },
       });
 
       for (const part of patternResponse.candidates?.[0]?.content?.parts || []) {
@@ -107,7 +107,8 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       }
       if (!patternImageB64) console.warn('Pattern gen: no image part in response');
     } catch (patErr) {
-      console.warn('Pattern generation failed, falling back to Sharp:', patErr.message);
+      console.error('Pattern generation FAILED:', patErr.message);
+      console.error('Pattern generation error details:', JSON.stringify(patErr, null, 2));
     }
 
     // Fallback: if Gemini image gen failed, use simple Sharp threshold
