@@ -78,6 +78,17 @@ function showResult(data) {
 
   document.getElementById('patternPreviewImg').src = 'data:image/png;base64,' + data.patternImageB64;
   document.getElementById('originalPreviewImg').src = 'data:image/png;base64,' + data.originalImageB64;
+
+  // ── Embroidery preview tab ──────────────────────────────────────────────────
+  var embTab = document.getElementById('embroideryTab');
+  var embImg = document.getElementById('embroideryPreviewImg');
+  if (data.embroideryPreviewB64) {
+    embImg.src = 'data:image/png;base64,' + data.embroideryPreviewB64;
+    embTab.style.display = '';          // show the tab
+  } else {
+    embTab.style.display = 'none';      // hide if generation failed
+  }
+
   document.getElementById('patternTitle').textContent = pd.title || 'My Pattern';
   document.getElementById('patternDesc').textContent = pd.description || '';
   document.getElementById('diffBadge').textContent = pd.difficulty || 'Beginner';
@@ -97,20 +108,29 @@ function showResult(data) {
     colorsGrid.appendChild(chip);
   });
 
+  // Default to pattern tab
+  switchPreview('pattern');
+
   document.getElementById('result-section').style.display = 'block';
   document.getElementById('result-section').scrollIntoView({ behavior: 'smooth' });
 }
 
-function switchPreview(type) {
+// ─── PREVIEW TOGGLE ───────────────────────────────────────────────────────────
+function switchPreview(type, evt) {
+  // Update active tab
   document.querySelectorAll('.ptab').forEach(function(t) { t.classList.remove('active'); });
-  event.target.classList.add('active');
-  if (type === 'pattern') {
-    document.getElementById('patternPreviewImg').style.display = 'block';
-    document.getElementById('originalPreviewImg').style.display = 'none';
+  if (evt) {
+    evt.target.classList.add('active');
   } else {
-    document.getElementById('patternPreviewImg').style.display = 'none';
-    document.getElementById('originalPreviewImg').style.display = 'block';
+    // Called programmatically — find the matching tab by data-type
+    var tab = document.querySelector('.ptab[data-type="' + type + '"]');
+    if (tab) tab.classList.add('active');
   }
+
+  // Show/hide images
+  document.getElementById('patternPreviewImg').style.display    = type === 'pattern'    ? 'block' : 'none';
+  document.getElementById('originalPreviewImg').style.display   = type === 'original'   ? 'block' : 'none';
+  document.getElementById('embroideryPreviewImg').style.display = type === 'embroidery' ? 'block' : 'none';
 }
 
 // ─── CIRCLE CLIP HELPER ───────────────────────────────────────────────────────
@@ -118,20 +138,17 @@ function clipImageToCircle(dataUrl) {
   return new Promise(function(resolve, reject) {
     var img = new Image();
     img.onload = function() {
-      var size = 600; // fixed square canvas
+      var size = 600;
       var canvas = document.createElement('canvas');
       canvas.width = size;
       canvas.height = size;
       var ctx = canvas.getContext('2d');
-      // White background
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, size, size);
-      // Clip to perfect circle
       ctx.beginPath();
       ctx.arc(size/2, size/2, size/2, 0, Math.PI * 2);
       ctx.closePath();
       ctx.clip();
-      // Draw image scaled to fill the square (cover, not contain) then centered
       var scale = Math.max(size / img.width, size / img.height);
       var drawW = img.width * scale;
       var drawH = img.height * scale;
@@ -146,8 +163,6 @@ function clipImageToCircle(dataUrl) {
 }
 
 // ─── PDF GENERATION ───────────────────────────────────────────────────────────
-// A4 dimensions in mm: 210 x 297
-// Hoop sizes in mm (diameter)
 var HOOPS = [
   { label: '3" Hoop',  mm: 76.2  },
   { label: '4" Hoop',  mm: 101.6 },
@@ -162,50 +177,36 @@ async function generatePatternPDF() {
   var doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
   var pd = patternResult.patternData;
   var W = 210; var H = 297;
-
-  // Use helvetica - clean and reliable for PDF
   var FONT = 'helvetica';
 
-  // ── PAGE 1: Cover / intro ──
-  // Background
+  // ── PAGE 1: Cover ──
   doc.setFillColor(250, 247, 244);
   doc.rect(0, 0, W, H, 'F');
-
-  // Top accent bar
   doc.setFillColor(92, 122, 82);
   doc.rect(0, 0, W, 8, 'F');
-
-  // Logo area
   doc.setFont(FONT, 'bold');
   doc.setFontSize(28);
   doc.setTextColor(92, 122, 82);
   doc.text('Stitchify', W/2, 30, { align: 'center' });
-
   doc.setFont(FONT, 'normal');
   doc.setFontSize(11);
   doc.setTextColor(122, 101, 88);
   doc.text('Hand Embroidery Pattern', W/2, 38, { align: 'center' });
 
-  // Original image - maintain aspect ratio
   try {
     var origImg = 'data:image/png;base64,' + patternResult.originalImageB64;
     doc.addImage(origImg, 'PNG', 30, 45, 150, 120, undefined, 'MEDIUM');
   } catch(e) {}
 
-  // Title
   doc.setFont(FONT, 'bold');
   doc.setFontSize(20);
   doc.setTextColor(45, 32, 24);
   doc.text(pd.title || 'My Embroidery Pattern', W/2, 172, { align: 'center' });
-
-  // Description
   doc.setFont(FONT, 'normal');
   doc.setFontSize(11);
   doc.setTextColor(122, 101, 88);
   var descLines = doc.splitTextToSize(pd.description || '', 150);
   doc.text(descLines, W/2, 182, { align: 'center' });
-
-  // Difficulty
   doc.setFillColor(237, 244, 234);
   doc.roundedRect(75, 192, 60, 10, 5, 5, 'F');
   doc.setFont(FONT, 'bold');
@@ -213,13 +214,11 @@ async function generatePatternPDF() {
   doc.setTextColor(92, 122, 82);
   doc.text('Difficulty: ' + (pd.difficulty || 'Beginner'), W/2, 199, { align: 'center' });
 
-  // DMC Colors
   var yc = 210;
   doc.setFont(FONT, 'bold');
   doc.setFontSize(11);
   doc.setTextColor(45, 32, 24);
   doc.text('DMC Thread Colors', 24, yc);
-
   var colors = pd.dmcColors || [];
   var cx = 24;
   colors.forEach(function(c, i) {
@@ -243,7 +242,6 @@ async function generatePatternPDF() {
     doc.text(c.name, x + 13, yc + 12);
   });
 
-  // Stitch suggestions
   var ys = yc + 26;
   doc.setFont(FONT, 'bold');
   doc.setFontSize(11);
@@ -254,13 +252,9 @@ async function generatePatternPDF() {
   doc.setTextColor(122,101,88);
   var tipLines = doc.splitTextToSize(pd.stitchSuggestions || '', 162);
   doc.text(tipLines, 24, ys + 7);
-
-  // Personal use note
   doc.setFontSize(8);
   doc.setTextColor(180,160,150);
   doc.text('This pattern is for personal use only. Please do not sell, distribute or share.', W/2, H - 10, { align: 'center' });
-
-  // Bottom bar
   doc.setFillColor(92, 122, 82);
   doc.rect(0, H - 6, W, 6, 'F');
 
@@ -268,16 +262,10 @@ async function generatePatternPDF() {
   for (var h = 0; h < HOOPS.length; h++) {
     doc.addPage();
     var hoop = HOOPS[h];
-
-    // Background
     doc.setFillColor(250, 247, 244);
     doc.rect(0, 0, W, H, 'F');
-
-    // Top bar
     doc.setFillColor(92, 122, 82);
     doc.rect(0, 0, W, 8, 'F');
-
-    // Header
     doc.setFont(FONT, 'bold');
     doc.setFontSize(14);
     doc.setTextColor(92, 122, 82);
@@ -286,52 +274,37 @@ async function generatePatternPDF() {
     doc.setFontSize(10);
     doc.setTextColor(122, 101, 88);
     doc.text(pd.title || 'My Pattern', 24, 27);
-
-    // Hoop size label - right aligned
     doc.setFont(FONT, 'bold');
     doc.setFontSize(16);
     doc.setTextColor(45, 32, 24);
     doc.text(hoop.label, W - 24, 22, { align: 'right' });
-
-    // Separator line
     doc.setDrawColor(200, 185, 170);
     doc.setLineWidth(0.3);
     doc.line(24, 32, W - 24, 32);
 
-    // Calculate hoop position - centered on page
     var r = hoop.mm / 2;
     var cx2 = W / 2;
     var cy2 = H / 2 + 10;
-
-    // Make sure it fits on the page
     if (cy2 + r > H - 30) cy2 = H - 30 - r;
     if (cy2 - r < 40) cy2 = 40 + r;
 
-    // Outer hoop ring (wood effect)
     doc.setDrawColor(180, 140, 80);
     doc.setLineWidth(4.5);
     doc.circle(cx2, cy2, r + 5);
-
     doc.setDrawColor(210, 180, 120);
     doc.setLineWidth(2);
     doc.circle(cx2, cy2, r + 6.5);
-
     doc.setDrawColor(150, 110, 60);
     doc.setLineWidth(1);
     doc.circle(cx2, cy2, r + 3);
-
-    // Fabric background inside hoop
     doc.setFillColor(249, 246, 240);
     doc.circle(cx2, cy2, r + 2, 'F');
-
-    // Dashed circle guide
     doc.setDrawColor(180, 160, 140);
     doc.setLineWidth(0.4);
     doc.setLineDashPattern([3, 3], 0);
     doc.circle(cx2, cy2, r);
     doc.setLineDashPattern([], 0);
 
-    // Pattern image inside hoop - pre-clip to circle using canvas
     try {
       var clippedDataUrl = await clipImageToCircle(
         'data:image/png;base64,' + patternResult.patternImageB64
@@ -342,20 +315,15 @@ async function generatePatternPDF() {
       doc.addImage(clippedDataUrl, 'PNG', imgX, imgY, imgSize, imgSize, undefined, 'FAST');
     } catch(e) { console.error('Image clip error:', e); }
 
-    // Hoop size label below
     doc.setFont(FONT, 'bold');
     doc.setFontSize(11);
     doc.setTextColor(45, 32, 24);
     doc.text(hoop.label, cx2, cy2 + r + 14, { align: 'center' });
-
-    // Print instruction
     doc.setFont(FONT, 'normal');
     doc.setFontSize(8);
     doc.setTextColor(150, 130, 120);
     doc.text('Print on A4 — choose "Fit to Page". The hoop guide above is true to size.', cx2, H - 16, { align: 'center' });
     doc.text('For personal use only.', cx2, H - 11, { align: 'center' });
-
-    // Bottom bar
     doc.setFillColor(92, 122, 82);
     doc.rect(0, H - 6, W, 6, 'F');
   }
