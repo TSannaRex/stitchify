@@ -86,89 +86,54 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       console.warn('Embroidery preview generation failed:', imgErr.message);
     }
 
-    // 3. Pattern processing - morphological outline extraction
-    //
-    // Technique: threshold to binary, erode inward, subtract = outline only.
-    // No solid fills. Works for colour photos and black-on-white illustrations.
-    //
-    // sensitivity slider: higher = lower binaryThreshold = catches subtler darks
-    const sensitivity = parseInt(req.body.sensitivity) || 128;
+    // 3. Pattern processing - ask Gemini to generate a coloring page version
+    // This gives clean outlines identical to a professional embroidery pattern,
+    // handling colour photos, illustrations, and black-on-white images equally well.
+    let patternImageB64 = null;
+    try {
+      const patternResponse = await ai.models.generateContent({
+        model: 'gemini-2.0-flash-preview-image-generation',
+        contents: [{ role: 'user', parts: [
+          { inlineData: { mimeType: originalMime, data: originalB64 } },
+          { text: `Convert this image into a clean coloring book page. Output ONLY black outlines on a pure white background. No fills, no shading, no grey areas. Every element from the original should be represented as clean black outlines only — like a professional hand embroidery pattern. Include all details: text, characters, decorative elements. White background, black lines only.` }
+        ]}],
+        generationConfig: { responseModalities: ['IMAGE'] },
+      });
 
-    // sensitivity 50-220 maps binaryThreshold 200-80
-    const binaryThreshold = Math.round(200 - ((sensitivity - 50) / 170) * 120);
-
-    // sensitivity 50-220 maps erodeBlur 0.8-2.0 (controls line thickness)
-    // Kept small so thin details (hat texture, scarf folds) survive erosion.
-    const erodeBlur = 0.8 + ((sensitivity - 50) / 170) * 1.2;
-
-    // Step A: remove dark/black backgrounds, then greyscale + binary threshold.
-    // Many images have black or very dark backgrounds. We detect near-black pixels
-    // and replace them with white before processing, so the background does not
-    // swamp the foreground detail.
-    const { data: rawData, info: rawInfo } = await sharp(req.file.buffer)
-      .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
-      .flatten({ background: { r: 255, g: 255, b: 255 } })
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-
-    const channels = rawInfo.channels;
-    const cleanedData = Buffer.from(rawData);
-    for (let i = 0; i < cleanedData.length; i += channels) {
-      const r = cleanedData[i], g = cleanedData[i + 1], b = cleanedData[i + 2];
-      // If pixel is very dark (near-black background), replace with white
-      if (r < 40 && g < 40 && b < 40) {
-        cleanedData[i] = 255; cleanedData[i + 1] = 255; cleanedData[i + 2] = 255;
-        if (channels === 4) cleanedData[i + 3] = 255;
+      for (const part of patternResponse.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData?.mimeType?.startsWith('image/')) {
+          patternImageB64 = part.inlineData.data;
+          break;
+        }
       }
+    } catch (patErr) {
+      console.warn('Pattern generation failed, falling back to Sharp:', patErr.message);
     }
 
-    const binaryBuffer = await sharp(cleanedData, {
-        raw: { width: rawInfo.width, height: rawInfo.height, channels }
-      })
-      .greyscale()
-      .normalise()
-      .threshold(binaryThreshold)
-      .png()
-      .toBuffer();
+    // Fallback: if Gemini image gen failed, use simple Sharp threshold
+    if (!patternImageB64) {
+      const sensitivity = parseInt(req.body.sensitivity) || 128;
+      const binaryThreshold = Math.round(240 - ((sensitivity - 50) / 170) * 180);
+      const fallbackBuffer = await sharp(req.file.buffer)
+        .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+        .flatten({ background: { r: 255, g: 255, b: 255 } })
+        .greyscale()
+        .normalise()
+        .threshold(binaryThreshold)
+        .png()
+        .toBuffer();
+      patternImageB64 = fallbackBuffer.toString('base64');
+    }
 
-    // Step B: erode - shrink the black shapes inward.
-    // Higher threshold (128) on re-binarise keeps the eroded version
-    // cleanly binary so the difference step gives pure black not grey.
-    // Smaller erodeBlur preserves thin strokes (hat texture, scarf folds).
-    const erodedBuffer = await sharp(binaryBuffer)
-      .negate()
-      .blur(erodeBlur)
-      .threshold(128)
-      .negate()
-      .png()
-      .toBuffer();
-
-    // Step C: difference blend -> outline ring only.
-    // normalise() stretches output to full range, threshold(128) snaps to B&W.
-    // median() removes salt-and-pepper speckle noise from the hat/scarf texture.
-    // Final blur+threshold dilates lines slightly for bolder, cleaner strokes.
-    const diffBuffer = await sharp(binaryBuffer)
-      .composite([{ input: erodedBuffer, blend: 'difference' }])
-      .normalise()
-      .threshold(128)
-      .median(3)
-      .png()
-      .toBuffer();
-
-    const patternBuffer = await sharp(diffBuffer)
-      .blur(0.6)
-      .threshold(100)
-      .png()
-      .toBuffer();
-
-    const originalResized = await sharp(req.file.buffer)
+        const originalResized = await sharp(req.file.buffer)
+      .rotate()
       .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
       .png().toBuffer();
 
     res.json({
       patternData,
-      patternImageB64:     patternBuffer.toString('base64'),
+      patternImageB64,
       originalImageB64:    originalResized.toString('base64'),
       embroideryPreviewB64,
     });
