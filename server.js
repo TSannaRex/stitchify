@@ -23,6 +23,29 @@ const HOOPS = [
   { label: '8" Hoop', mm: 203.2 },
 ];
 
+// ── Gemini retry helper ────────────────────────────────────────────────────
+// Retries a Gemini API call up to maxRetries times with exponential backoff.
+// Catches 429 (rate limit) and 503 (overload) errors automatically.
+async function geminiWithRetry(fn, maxRetries = 4) {
+  let delay = 2000;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = err.message || '';
+      const is429 = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('Resource exhausted');
+      const is503 = msg.includes('503') || msg.includes('UNAVAILABLE');
+      if ((is429 || is503) && attempt < maxRetries) {
+        console.warn(`Gemini rate limit hit (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        delay *= 2; // exponential backoff: 2s, 4s, 8s, 16s
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 app.post('/api/convert', upload.single('image'), async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not set.' });
@@ -49,7 +72,7 @@ Return a JSON object with these exact fields:
 }
 Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Return ONLY the JSON.` }
       ]}],
-    });
+    }));
 
     let patternData;
     try {
@@ -67,14 +90,14 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     // 2. Gemini image generation - photo-realistic embroidery preview (best-effort)
     let embroideryPreviewB64 = null;
     try {
-      const imgResponse = await ai.models.generateContent({
+      const imgResponse = await geminiWithRetry(() => ai.models.generateContent({
         model: 'gemini-3.1-flash-image-preview',
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: originalMime, data: originalB64 } },
           { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture - satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
         ]}],
         generationConfig: { responseModalities: ['IMAGE'] },
-      });
+      }));
 
       for (const part of imgResponse.candidates?.[0]?.content?.parts || []) {
         if (part.inlineData?.mimeType?.startsWith('image/')) {
@@ -90,14 +113,14 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     // gemini-3.1-flash-image-preview supports image input + image output.
     let patternImageB64 = null;
     try {
-      const patternResponse = await ai.models.generateContent({
+      const patternResponse = await geminiWithRetry(() => ai.models.generateContent({
         model: 'gemini-3.1-flash-image-preview',
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: originalMime, data: originalB64 } },
           { text: 'Turn this into a coloring page. White background, black outlines only, no fills, no shading.' }
         ]}],
         generationConfig: { responseModalities: ['IMAGE'] },
-      });
+      }));
 
       for (const part of patternResponse.candidates?.[0]?.content?.parts || []) {
         if (part.inlineData?.mimeType?.startsWith('image/')) {
