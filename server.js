@@ -57,7 +57,7 @@ app.post('/api/convert', upload.single('image'), async (req, res) => {
     const originalMime = req.file.mimetype;
 
     // 1. Gemini text analysis
-    const response = await ai.models.generateContent({
+    const response = await geminiWithRetry(() => ai.models.generateContent({
       model: 'gemini-2.0-flash',
       contents: [{ role: 'user', parts: [
         { inlineData: { mimeType: originalMime, data: originalB64 } },
