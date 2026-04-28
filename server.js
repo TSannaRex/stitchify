@@ -87,27 +87,12 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       };
     }
 
-    // 2. Gemini image generation - photo-realistic embroidery preview (best-effort)
-    let embroideryPreviewB64 = null;
-    try {
-      const imgResponse = await geminiWithRetry(() => ai.models.generateContent({
-        model: 'gemini-3.1-flash-image-preview',
-        contents: [{ role: 'user', parts: [
-          { inlineData: { mimeType: originalMime, data: originalB64 } },
-          { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture - satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
-        ]}],
-        generationConfig: { responseModalities: ['IMAGE'] },
-      }));
+    // 2. Embroidery preview is generated on-demand via /api/preview endpoint
+    // to avoid burning 3x quota on every single convert request.
+    const embroideryPreviewB64 = null;
 
-      for (const part of imgResponse.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData?.mimeType?.startsWith('image/')) {
-          embroideryPreviewB64 = part.inlineData.data;
-          break;
-        }
-      }
-    } catch (imgErr) {
-      console.warn('Embroidery preview generation failed:', imgErr.message);
-    }
+    // Small pause between API calls to stay within per-minute rate limits
+    await new Promise(r => setTimeout(r, 1000));
 
     // 3. Pattern processing - ask Gemini to generate a coloring page version.
     // gemini-3.1-flash-image-preview supports image input + image output.
@@ -165,6 +150,55 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
   } catch (err) {
     console.error('Convert error:', err);
     res.status(500).json({ error: err.message || 'Conversion failed.' });
+  }
+});
+
+// On-demand embroidery preview — only called when user clicks the Embroidered tab
+app.post('/api/preview', upload.single('image'), async (req, res) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not set.' });
+  if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
+
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const originalB64 = req.file.buffer.toString('base64');
+    const originalMime = req.file.mimetype;
+
+    const imgResponse = await geminiWithRetry(() => ai.models.generateContent({
+      model: 'gemini-3.1-flash-image-preview',
+      contents: [{ role: 'user', parts: [
+        { inlineData: { mimeType: originalMime, data: originalB64 } },
+        { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture - satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
+      ]}],
+      generationConfig: { responseModalities: ['IMAGE'] },
+    }));
+
+    let embroideryPreviewB64 = null;
+    for (const part of imgResponse.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData?.mimeType?.startsWith('image/')) {
+        embroideryPreviewB64 = part.inlineData.data;
+        break;
+      }
+    }
+
+    if (!embroideryPreviewB64) return res.status(500).json({ error: 'No image generated.' });
+    res.json({ embroideryPreviewB64 });
+
+  } catch (err) {
+    console.error('Preview error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/models', async (req, res) => {
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const result = await ai.models.list();
+    const names = [];
+    for await (const m of result) names.push(m.name);
+    res.json(names);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
