@@ -280,12 +280,13 @@ app.post('/api/generate-pdf', async (req, res) => {
         </div>
         <div class="hoop-sep"></div>
         <div class="hoop-center">
-          <div style="width:${px(h.mm + 14)}px;height:${px(h.mm + 14)}px;border-radius:50%;background:conic-gradient(#d4a84b,#c8973a,#e8c06a,#c8973a,#d4a84b);display:flex;align-items:center;justify-content:center;">
-            <div style="width:${px(h.mm + 4)}px;height:${px(h.mm + 4)}px;border-radius:50%;background:#b8842a;display:flex;align-items:center;justify-content:center;">
-              <div style="width:${px(h.mm)}px;height:${px(h.mm)}px;border-radius:50%;background:#f9f6f0;overflow:hidden;border:1px dashed #c8b09a;">
-                <img src="${patSrc}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">
-              </div>
-            </div>
+          <div style="position:relative;width:${px(h.mm + 14)}px;height:${px(h.mm + 14)}px;display:flex;align-items:center;justify-content:center;">
+            <!-- Hoop ring: decorative only, does NOT clip the pattern -->
+            <div style="position:absolute;inset:0;border-radius:50%;background:conic-gradient(#d4a84b,#c8973a,#e8c06a,#c8973a,#d4a84b);"></div>
+            <div style="position:absolute;inset:5px;border-radius:50%;background:#b8842a;"></div>
+            <div style="position:absolute;inset:10px;border-radius:50%;background:#f9f6f0;"></div>
+            <!-- Pattern: sits on top, square, no circular clip -->
+            <img src="${patSrc}" style="position:relative;width:${px(h.mm * 0.82)}px;height:${px(h.mm * 0.82)}px;object-fit:contain;display:block;z-index:1;">
           </div>
           <div class="hoop-label">${h.label}</div>
         </div>
