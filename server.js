@@ -85,7 +85,7 @@ app.post('/api/convert', upload.single('image'), async (req, res) => {
       }
 
       // Add a small padding around the detected content
-      const pad = Math.round(Math.min(width, height) * 0.03);
+      const pad = Math.round(Math.min(width, height) * 0.08);
       minX = Math.max(0, minX - pad);
       minY = Math.max(0, minY - pad);
       maxX = Math.min(width - 1, maxX + pad);
@@ -106,8 +106,11 @@ app.post('/api/convert', upload.single('image'), async (req, res) => {
       return req.file.buffer;
     })();
 
-    const originalB64 = croppedBuffer.toString('base64');
-    const originalMime = 'image/png';
+    // Use original (uncropped) image for text analysis so Gemini gets full context
+    const originalB64 = req.file.buffer.toString('base64');
+    const originalMime = req.file.mimetype;
+    // Use cropped image for pattern/embroidery generation
+    const croppedB64 = croppedBuffer.toString('base64');
 
     // 1. Gemini text analysis
     const response = await geminiWithRetry(() => ai.models.generateContent({
@@ -154,7 +157,7 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       const patternResponse = await geminiWithRetry(() => ai.models.generateContent({
         model: 'gemini-3.1-flash-image-preview',
         contents: [{ role: 'user', parts: [
-          { inlineData: { mimeType: originalMime, data: originalB64 } },
+          { inlineData: { mimeType: 'image/png', data: croppedB64 } },
           { text: 'Turn this into a coloring page. White background, black outlines only, no fills, no shading.' }
         ]}],
         generationConfig: { responseModalities: ['IMAGE'] },
@@ -230,7 +233,7 @@ app.post('/api/preview', upload.single('image'), async (req, res) => {
     const imgResponse = await geminiWithRetry(() => ai.models.generateContent({
       model: 'gemini-3.1-flash-image-preview',
       contents: [{ role: 'user', parts: [
-        { inlineData: { mimeType: originalMime, data: originalB64 } },
+        { inlineData: { mimeType: 'image/png', data: croppedB64 } },
         { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture - satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
       ]}],
       generationConfig: { responseModalities: ['IMAGE'] },
