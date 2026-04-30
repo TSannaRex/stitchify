@@ -153,14 +153,40 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
         model: 'gemini-3.1-flash-image-preview',
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: originalMime, data: originalB64 } },
-          { text: 'Turn this into a circular embroidery pattern coloring page. IMPORTANT: compose ALL elements of the design within a circle shape, leaving white space in the corners outside the circle. The entire design must fit within a circular boundary. White background, black outlines only, no fills, no shading, no grey. Every element must be clearly visible inside the circle.' }
+          { text: 'Turn this into a coloring page style embroidery pattern. Rules: (1) Pure white background. (2) PURE BLACK lines only - 100% black, no grey, no shading. (3) No fills. (4) Scale and arrange ALL elements to fill the entire square canvas edge to edge. (5) Nothing should be cut off.' }
         ]}],
         generationConfig: { responseModalities: ['IMAGE'] },
       }));
 
       for (const part of patternResponse.candidates?.[0]?.content?.parts || []) {
         if (part.inlineData?.mimeType?.startsWith('image/')) {
-          patternImageB64 = part.inlineData.data;
+          // Post-process: force lines to pure black, background to pure white
+          // Gemini sometimes outputs grey lines — normalise + threshold fixes this
+          const rawBuf = Buffer.from(part.inlineData.data, 'base64');
+          // 1. Force pure black lines (normalise + threshold eliminates grey)
+          // 2. Fit into a perfect square canvas so the circular hoop clip
+          //    shows the full design without cutting off corners.
+          //    We find the content bounds, crop tight, then embed in a square.
+          const greyBuf = await sharp(rawBuf)
+            .greyscale()
+            .normalise()
+            .threshold(180)
+            .png()
+            .toBuffer();
+
+          // Get image dimensions
+          const meta = await sharp(greyBuf).metadata();
+          const size = Math.max(meta.width, meta.height);
+
+          // Embed into a square canvas (white background) - centres the design
+          const cleanBuf = await sharp(greyBuf)
+            .resize(size, size, {
+              fit: 'contain',
+              background: { r: 255, g: 255, b: 255 }
+            })
+            .png()
+            .toBuffer();
+          patternImageB64 = cleanBuf.toString('base64');
           break;
         }
       }
