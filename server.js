@@ -1,412 +1,453 @@
-import express from 'express';
-import { GoogleGenAI } from '@google/genai';
-import multer from 'multer';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import sharp from 'sharp';
-import puppeteer from 'puppeteer-core';
-import chromium from '@sparticuz/chromium';
+// ─── STATE ────────────────────────────────────────────────────────────────────
+var selectedFile = null;
+var patternResult = null;
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const app = express();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+// ─── UPLOAD HANDLING ──────────────────────────────────────────────────────────
+function handleFile(input) {
+  var f = input.files[0];
+  if (!f) return;
+  selectedFile = f;
+  var url = URL.createObjectURL(f);
+  document.getElementById('previewImg').src = url;
+  document.getElementById('uploadInner').style.display = 'none';
+  document.getElementById('previewWrap').style.display = 'block';
+  document.getElementById('convertBtn').disabled = false;
+  document.getElementById('result-section').style.display = 'none';
+}
 
-app.use(express.json({ limit: '30mb' }));
-app.use(express.static(__dirname + '/public'));
+function resetUpload() {
+  selectedFile = null;
+  patternResult = null;
+  document.getElementById('fileInput').value = '';
+  document.getElementById('previewImg').src = '';
+  document.getElementById('uploadInner').style.display = 'block';
+  document.getElementById('previewWrap').style.display = 'none';
+  document.getElementById('convertBtn').disabled = true;
+  document.getElementById('result-section').style.display = 'none';
+}
 
-const HOOPS = [
-  { label: '3" Hoop', mm: 76.2  },
-  { label: '4" Hoop', mm: 101.6 },
-  { label: '5" Hoop', mm: 127.0 },
-  { label: '6" Hoop', mm: 152.4 },
-  { label: '7" Hoop', mm: 177.8 },
-  { label: '8" Hoop', mm: 203.2 },
+// Drag and drop
+var zone = document.getElementById('uploadZone');
+zone.addEventListener('dragover', function(e) { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', function() { zone.classList.remove('dragover'); });
+zone.addEventListener('drop', function(e) {
+  e.preventDefault();
+  zone.classList.remove('dragover');
+  var f = e.dataTransfer.files[0];
+  if (f && (f.type === 'image/jpeg' || f.type === 'image/png')) {
+    var dt = new DataTransfer();
+    dt.items.add(f);
+    document.getElementById('fileInput').files = dt.files;
+    handleFile(document.getElementById('fileInput'));
+  }
+});
+
+// ─── CONVERT ──────────────────────────────────────────────────────────────────
+async function convert() {
+  if (!selectedFile) return;
+
+  showLoading('Analysing your image...');
+  document.getElementById('convertBtn').disabled = true;
+
+  var fd = new FormData();
+  fd.append('image', selectedFile);
+  fd.append('sensitivity', document.getElementById('sensitivity').value);
+  fd.append('thickness', document.getElementById('thickness').value);
+
+  try {
+    updateLoading('Generating your embroidery pattern...');
+    var res = await fetch('/api/convert', { method: 'POST', body: fd });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Conversion failed');
+
+    updateLoading('Almost there...');
+    patternResult = data;
+    showResult(data);
+    // Auto-load embroidery preview in background so it's ready for the PDF
+    loadEmbroideryPreview();
+
+  } catch (e) {
+    hideLoading();
+    alert('Sorry, something went wrong: ' + e.message);
+  } finally {
+    hideLoading();
+    document.getElementById('convertBtn').disabled = false;
+  }
+}
+
+function showResult(data) {
+  var pd = data.patternData;
+
+  document.getElementById('patternPreviewImg').src = 'data:image/png;base64,' + data.patternImageB64;
+  document.getElementById('originalPreviewImg').src = 'data:image/png;base64,' + data.originalImageB64;
+
+  // Always show the embroidery tab — it lazy-loads when clicked
+  var embTab = document.getElementById('embroideryTab');
+  var embImg = document.getElementById('embroideryPreviewImg');
+  embImg.removeAttribute('data-loaded');  // reset so it reloads for new image
+  embImg.src = '';
+  embTab.style.display = '';              // always show the tab
+
+  document.getElementById('patternTitle').textContent = pd.title || 'My Pattern';
+  document.getElementById('patternDesc').textContent = pd.description || '';
+  document.getElementById('diffBadge').textContent = pd.difficulty || 'Beginner';
+  document.getElementById('stitchTips').textContent = pd.stitchSuggestions || '';
+
+  var colorsGrid = document.getElementById('colorsGrid');
+  colorsGrid.innerHTML = '';
+  (pd.dmcColors || []).forEach(function(c) {
+    var chip = document.createElement('div');
+    chip.className = 'color-chip';
+    chip.innerHTML =
+      '<div class="color-swatch" style="background:' + (c.hex || '#ccc') + '"></div>' +
+      '<div class="color-info">' +
+        '<span class="color-code">DMC ' + c.code + '</span>' +
+        '<span class="color-name">' + c.name + '</span>' +
+      '</div>';
+    colorsGrid.appendChild(chip);
+  });
+
+  // Default to pattern tab
+  switchPreview('pattern');
+
+  document.getElementById('result-section').style.display = 'block';
+  document.getElementById('result-section').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ─── PREVIEW TOGGLE ───────────────────────────────────────────────────────────
+function switchPreview(type, evt) {
+  document.querySelectorAll('.ptab').forEach(function(t) { t.classList.remove('active'); });
+  if (evt) {
+    evt.target.classList.add('active');
+  } else {
+    var tab = document.querySelector('.ptab[data-type="' + type + '"]');
+    if (tab) tab.classList.add('active');
+  }
+
+  document.getElementById('patternPreviewImg').style.display    = type === 'pattern'    ? 'block' : 'none';
+  document.getElementById('originalPreviewImg').style.display   = type === 'original'   ? 'block' : 'none';
+  document.getElementById('embroideryPreviewImg').style.display = type === 'embroidery' ? 'block' : 'none';
+
+  // Lazy-load the embroidery preview on first click
+  if (type === 'embroidery') {
+    var embImg = document.getElementById('embroideryPreviewImg');
+    if (!embImg.getAttribute('data-loaded')) {
+      loadEmbroideryPreview();
+    }
+  }
+}
+
+// ─── EMBROIDERY PREVIEW (lazy) ────────────────────────────────────────────────
+async function loadEmbroideryPreview() {
+  if (!selectedFile) return;
+  if (loadEmbroideryPreview._inProgress) return;  // prevent duplicate calls
+  loadEmbroideryPreview._inProgress = true;
+
+  var embImg = document.getElementById('embroideryPreviewImg');
+  var hoop   = document.querySelector('.hoop-circle');
+
+  // Show a subtle loading state
+  embImg.style.opacity = '0.3';
+  if (hoop) hoop.style.opacity = '0.5';
+
+  try {
+    var fd = new FormData();
+    fd.append('image', selectedFile);
+    var res  = await fetch('/api/preview', { method: 'POST', body: fd });
+    var data = await res.json();
+
+    if (data.embroideryPreviewB64) {
+      embImg.src = 'data:image/png;base64,' + data.embroideryPreviewB64;
+      embImg.setAttribute('data-loaded', 'true');
+      // Store on patternResult so the PDF can use it
+      if (patternResult) patternResult.embroideryPreviewB64 = data.embroideryPreviewB64;
+    } else {
+      console.warn('No embroidery preview returned:', data.error || '');
+    }
+  } catch (e) {
+    console.warn('Embroidery preview failed:', e.message);
+  } finally {
+    embImg.style.opacity = '1';
+    if (hoop) hoop.style.opacity = '1';
+    loadEmbroideryPreview._inProgress = false;
+  }
+}
+
+// ─── CIRCLE CLIP HELPER ───────────────────────────────────────────────────────
+function clipImageToCircle(dataUrl) {
+  return new Promise(function(resolve, reject) {
+    var img = new Image();
+    img.onload = function() {
+      var size = 600;
+      var canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, size, size);
+      ctx.beginPath();
+      ctx.arc(size/2, size/2, size/2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      var scale = Math.min(size / img.width, size / img.height);
+      var drawW = img.width * scale;
+      var drawH = img.height * scale;
+      var drawX = (size - drawW) / 2;
+      var drawY = (size - drawH) / 2;
+      ctx.drawImage(img, drawX, drawY, drawW, drawH);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+// ─── PDF GENERATION ───────────────────────────────────────────────────────────
+var HOOPS = [
+  { label: '3" Hoop',  mm: 76.2  },
+  { label: '4" Hoop',  mm: 101.6 },
+  { label: '5" Hoop',  mm: 127.0 },
+  { label: '6" Hoop',  mm: 152.4 },
+  { label: '7" Hoop',  mm: 177.8 },
+  { label: '8" Hoop',  mm: 203.2 },
 ];
 
-// ── Gemini retry helper ────────────────────────────────────────────────────
-// Retries a Gemini API call up to maxRetries times with exponential backoff.
-// Catches 429 (rate limit) and 503 (overload) errors automatically.
-async function geminiWithRetry(fn, maxRetries = 4) {
-  let delay = 2000;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      const msg = err.message || '';
-      const is429 = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('Resource exhausted');
-      const is503 = msg.includes('503') || msg.includes('UNAVAILABLE');
-      if ((is429 || is503) && attempt < maxRetries) {
-        console.warn(`Gemini rate limit hit (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`);
-        await new Promise(r => setTimeout(r, delay));
-        delay *= 2; // exponential backoff: 2s, 4s, 8s, 16s
-      } else {
-        throw err;
-      }
-    }
-  }
-}
+async function generatePatternPDF() {
+  var { jsPDF } = window.jspdf;
+  var doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  var pd = patternResult.patternData;
+  var W = 210; var H = 297;
+  var FONT = 'helvetica';
 
-app.post('/api/convert', upload.single('image'), async (req, res) => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not set.' });
-  if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
+  // ── PAGE 1: Cover ──
+  doc.setFillColor(250, 247, 244);
+  doc.rect(0, 0, W, H, 'F');
+  doc.setFillColor(92, 122, 82);
+  doc.rect(0, 0, W, 8, 'F');
+  doc.setFont(FONT, 'bold');
+  doc.setFontSize(28);
+  doc.setTextColor(92, 122, 82);
+  doc.text('Stitchify', W/2, 30, { align: 'center' });
+  doc.setFont(FONT, 'normal');
+  doc.setFontSize(11);
+  doc.setTextColor(122, 101, 88);
+  doc.text('Hand Embroidery Pattern', W/2, 38, { align: 'center' });
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    var origImg = 'data:image/png;base64,' + patternResult.originalImageB64;
+    doc.addImage(origImg, 'PNG', 30, 45, 150, 120, undefined, 'MEDIUM');
+  } catch(e) {}
 
-    // Auto-crop: remove dark/transparent borders so the design fills the frame.
-    // This prevents the hoop circle from clipping designs that sit in a padded canvas.
-    const croppedBuffer = await (async () => {
-      const { data: raw, info } = await sharp(req.file.buffer)
-        .rotate()
-        .flatten({ background: { r: 255, g: 255, b: 255 } })
-        .raw()
-        .toBuffer({ resolveWithObject: true });
+  doc.setFont(FONT, 'bold');
+  doc.setFontSize(20);
+  doc.setTextColor(45, 32, 24);
+  doc.text(pd.title || 'My Embroidery Pattern', W/2, 172, { align: 'center' });
+  doc.setFont(FONT, 'normal');
+  doc.setFontSize(11);
+  doc.setTextColor(122, 101, 88);
+  var descLines = doc.splitTextToSize(pd.description || '', 150);
+  doc.text(descLines, W/2, 182, { align: 'center' });
+  doc.setFillColor(237, 244, 234);
+  doc.roundedRect(75, 192, 60, 10, 5, 5, 'F');
+  doc.setFont(FONT, 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(92, 122, 82);
+  doc.text('Difficulty: ' + (pd.difficulty || 'Beginner'), W/2, 199, { align: 'center' });
 
-      const { width, height, channels } = info;
-      let minX = width, minY = height, maxX = 0, maxY = 0;
+  var yc = 210;
+  doc.setFont(FONT, 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(45, 32, 24);
+  doc.text('DMC Thread Colors', 24, yc);
+  var colors = pd.dmcColors || [];
+  var cx = 24;
+  colors.forEach(function(c, i) {
+    if (i > 0 && i % 3 === 0) { cx = 24; yc += 18; }
+    var x = cx + (i % 3) * 58;
+    var hex = c.hex || '#cccccc';
+    var r = parseInt(hex.slice(1,3),16);
+    var g = parseInt(hex.slice(3,5),16);
+    var b = parseInt(hex.slice(5,7),16);
+    doc.setFillColor(r,g,b);
+    doc.circle(x + 5, yc + 8, 5, 'F');
+    doc.setDrawColor(180,180,180);
+    doc.circle(x + 5, yc + 8, 5, 'S');
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(45,32,24);
+    doc.text('DMC ' + c.code, x + 13, yc + 7);
+    doc.setFont(FONT, 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(122,101,88);
+    doc.text(c.name, x + 13, yc + 12);
+  });
 
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const i = (y * width + x) * channels;
-          const r = raw[i], g = raw[i+1], b = raw[i+2];
-          // Consider a pixel "content" if it's not near-black or near-white background
-          // Near-black: all channels < 40 (transparent/black bg)
-          // For white-bg images we skip this — just crop near-black
-          if (!(r < 40 && g < 40 && b < 40)) {
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
+  var ys = yc + 26;
+  doc.setFont(FONT, 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(45,32,24);
+  doc.text('Stitch Suggestions', 24, ys);
+  doc.setFont(FONT, 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(122,101,88);
+  var tipLines = doc.splitTextToSize(pd.stitchSuggestions || '', 162);
+  doc.text(tipLines, 24, ys + 7);
+  doc.setFontSize(8);
+  doc.setTextColor(180,160,150);
+  doc.text('This pattern is for personal use only. Please do not sell, distribute or share.', W/2, H - 10, { align: 'center' });
+  doc.setFillColor(92, 122, 82);
+  doc.rect(0, H - 6, W, 6, 'F');
 
-      // Add a small padding around the detected content
-      const pad = Math.round(Math.min(width, height) * 0.03);
-      minX = Math.max(0, minX - pad);
-      minY = Math.max(0, minY - pad);
-      maxX = Math.min(width - 1, maxX + pad);
-      maxY = Math.min(height - 1, maxY + pad);
+  // ── PAGES 2-7: One page per hoop size ──
+  for (var h = 0; h < HOOPS.length; h++) {
+    doc.addPage();
+    var hoop = HOOPS[h];
+    doc.setFillColor(250, 247, 244);
+    doc.rect(0, 0, W, H, 'F');
+    doc.setFillColor(92, 122, 82);
+    doc.rect(0, 0, W, 8, 'F');
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(14);
+    doc.setTextColor(92, 122, 82);
+    doc.text('Stitchify', 24, 20);
+    doc.setFont(FONT, 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(122, 101, 88);
+    doc.text(pd.title || 'My Pattern', 24, 27);
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(45, 32, 24);
+    doc.text(hoop.label, W - 24, 22, { align: 'right' });
+    doc.setDrawColor(200, 185, 170);
+    doc.setLineWidth(0.3);
+    doc.line(24, 32, W - 24, 32);
 
-      const cropW = maxX - minX + 1;
-      const cropH = maxY - minY + 1;
+    var r = hoop.mm / 2;
+    var cx2 = W / 2;
+    var cy2 = H / 2 + 10;
+    if (cy2 + r > H - 30) cy2 = H - 30 - r;
+    if (cy2 - r < 40) cy2 = 40 + r;
 
-      // Only crop if we found a meaningful content area (> 20% of original)
-      if (cropW > width * 0.2 && cropH > height * 0.2 && (cropW < width * 0.95 || cropH < height * 0.95)) {
-        return sharp(req.file.buffer)
-          .rotate()
-          .extract({ left: minX, top: minY, width: cropW, height: cropH })
-          .png()
-          .toBuffer();
-      }
-      // No meaningful crop found, use original
-      return req.file.buffer;
-    })();
+    doc.setDrawColor(180, 140, 80);
+    doc.setLineWidth(4.5);
+    doc.circle(cx2, cy2, r + 5);
+    doc.setDrawColor(210, 180, 120);
+    doc.setLineWidth(2);
+    doc.circle(cx2, cy2, r + 6.5);
+    doc.setDrawColor(150, 110, 60);
+    doc.setLineWidth(1);
+    doc.circle(cx2, cy2, r + 3);
+    doc.setFillColor(249, 246, 240);
+    doc.circle(cx2, cy2, r + 2, 'F');
+    doc.setDrawColor(180, 160, 140);
+    doc.setLineWidth(0.4);
+    doc.setLineDashPattern([3, 3], 0);
+    doc.circle(cx2, cy2, r);
+    doc.setLineDashPattern([], 0);
 
-    const originalB64 = croppedBuffer.toString('base64');
-    const originalMime = 'image/png';
+    try {
+      var clippedDataUrl = await clipImageToCircle(
+        'data:image/png;base64,' + patternResult.patternImageB64
+      );
+      var imgSize = (r - 1) * 2;
+      var imgX = cx2 - (imgSize / 2);
+      var imgY = cy2 - (imgSize / 2);
+      doc.addImage(clippedDataUrl, 'PNG', imgX, imgY, imgSize, imgSize, undefined, 'FAST');
+    } catch(e) { console.error('Image clip error:', e); }
 
-    // 1. Gemini text analysis
-    const response = await geminiWithRetry(() => ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [{ role: 'user', parts: [
-        { inlineData: { mimeType: originalMime, data: originalB64 } },
-        { text: `You are an expert embroidery pattern designer. Analyse this image carefully.
-Return a JSON object with these exact fields:
-{
-  "title": "short descriptive title of the main subject",
-  "description": "one warm sentence describing what this embroidery pattern depicts",
-  "dmcColors": [{ "code": "DMC code", "name": "color name", "hex": "#hexcode", "area": "what part" }],
-  "stitchSuggestions": "2-3 sentences suggesting stitches",
-  "difficulty": "Beginner / Intermediate / Advanced"
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(45, 32, 24);
+    doc.text(hoop.label, cx2, cy2 + r + 14, { align: 'center' });
+    doc.setFont(FONT, 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(150, 130, 120);
+    doc.text('Print on A4 — choose "Fit to Page". The hoop guide above is true to size.', cx2, H - 16, { align: 'center' });
+    doc.text('For personal use only.', cx2, H - 11, { align: 'center' });
+    doc.setFillColor(92, 122, 82);
+    doc.rect(0, H - 6, W, 6, 'F');
+  }
+
+  return doc;
 }
-Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Return ONLY the JSON.` }
-      ]}],
-    }));
 
-    let patternData;
-    try {
-      patternData = JSON.parse(response.text.replace(/```json|```/g, '').trim());
-    } catch (e) {
-      patternData = {
-        title: 'My Embroidery Pattern',
-        description: 'A beautiful hand embroidery pattern ready to stitch.',
-        dmcColors: [{ code: '310', name: 'Black', hex: '#000000', area: 'Outlines' }],
-        stitchSuggestions: 'Use back stitch for outlines, satin stitch for fills, French knots for texture.',
-        difficulty: 'Beginner'
-      };
-    }
-
-    // 2. Embroidery preview is generated on-demand via /api/preview endpoint
-    // to avoid burning 3x quota on every single convert request.
-    const embroideryPreviewB64 = null;
-
-    // Small pause between API calls to stay within per-minute rate limits
-    await new Promise(r => setTimeout(r, 1000));
-
-    // 3. Pattern processing - ask Gemini to generate a coloring page version.
-    // gemini-3.1-flash-image-preview supports image input + image output.
-    let patternImageB64 = null;
-    try {
-      const patternResponse = await geminiWithRetry(() => ai.models.generateContent({
-        model: 'gemini-3.1-flash-image-preview',
-        contents: [{ role: 'user', parts: [
-          { inlineData: { mimeType: originalMime, data: originalB64 } },
-          { text: 'Turn this into a coloring page. White background, black outlines only, no fills, no shading.' }
-        ]}],
-        generationConfig: { responseModalities: ['IMAGE'] },
-      }));
-
-      for (const part of patternResponse.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData?.mimeType?.startsWith('image/')) {
-          patternImageB64 = part.inlineData.data;
-          break;
-        }
+// ─── ZIP DOWNLOAD ─────────────────────────────────────────────────────────────
+async function downloadZip() {
+  showLoading('Creating your pattern PDF...');
+  try {
+    // If embroidery preview hasn't loaded yet, wait for it (max 30s)
+    if (!patternResult.embroideryPreviewB64) {
+      updateLoading('Finishing embroidery preview...');
+      const start = Date.now();
+      while (!patternResult.embroideryPreviewB64 && Date.now() - start < 30000) {
+        await new Promise(r => setTimeout(r, 500));
       }
-      if (!patternImageB64) console.warn('Pattern gen: no image part in response');
-    } catch (patErr) {
-      console.error('Pattern generation FAILED:', patErr.message);
-      console.error('Pattern generation error details:', JSON.stringify(patErr, null, 2));
     }
-
-    // Fallback: if Gemini image gen failed, use simple Sharp threshold
-    if (!patternImageB64) {
-      const sensitivity = parseInt(req.body.sensitivity) || 128;
-      const binaryThreshold = Math.round(240 - ((sensitivity - 50) / 170) * 180);
-      const fallbackBuffer = await sharp(req.file.buffer)
-        .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
-        .flatten({ background: { r: 255, g: 255, b: 255 } })
-        .greyscale()
-        .normalise()
-        .threshold(binaryThreshold)
-        .png()
-        .toBuffer();
-      patternImageB64 = fallbackBuffer.toString('base64');
-    }
-
-        // Use the already-cropped buffer for the original preview too
-    const originalResized = await sharp(croppedBuffer)
-      .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-      .flatten({ background: { r: 255, g: 255, b: 255 } })
-      .png().toBuffer();
-
-    res.json({
-      patternData,
-      patternImageB64,
-      originalImageB64:    originalResized.toString('base64'),
-      embroideryPreviewB64,
+    updateLoading('Generating PDF with Poppins font...');
+    var pdfRes = await fetch('/api/generate-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patternData: patternResult.patternData,
+        patternImageB64: patternResult.patternImageB64,
+        originalImageB64: patternResult.originalImageB64,
+        embroideryPreviewB64: patternResult.embroideryPreviewB64 || null
+      })
     });
-
-  } catch (err) {
-    console.error('Convert error:', err);
-    res.status(500).json({ error: err.message || 'Conversion failed.' });
-  }
-});
-
-// On-demand embroidery preview — only called when user clicks the Embroidered tab
-app.post('/api/preview', upload.single('image'), async (req, res) => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not set.' });
-  if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
-
-  try {
-    const ai = new GoogleGenAI({ apiKey });
-    const originalB64 = req.file.buffer.toString('base64');
-    const originalMime = req.file.mimetype;
-
-    const imgResponse = await geminiWithRetry(() => ai.models.generateContent({
-      model: 'gemini-3.1-flash-image-preview',
-      contents: [{ role: 'user', parts: [
-        { inlineData: { mimeType: originalMime, data: originalB64 } },
-        { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture - satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
-      ]}],
-      generationConfig: { responseModalities: ['IMAGE'] },
-    }));
-
-    let embroideryPreviewB64 = null;
-    for (const part of imgResponse.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData?.mimeType?.startsWith('image/')) {
-        embroideryPreviewB64 = part.inlineData.data;
-        break;
-      }
+    if (!pdfRes.ok) {
+      var errData = await pdfRes.json();
+      throw new Error(errData.error || 'PDF generation failed');
     }
+    var patternPdfBytes = await pdfRes.arrayBuffer();
 
-    if (!embroideryPreviewB64) return res.status(500).json({ error: 'No image generated.' });
-    res.json({ embroideryPreviewB64 });
+    updateLoading("Fetching Beginner's Guide...");
+    var guideRes = await fetch('/beginners-guide.pdf');
+    if (!guideRes.ok) throw new Error("Could not load Beginner's Guide");
+    var guideBytes = await guideRes.arrayBuffer();
 
-  } catch (err) {
-    console.error('Preview error:', err.message);
-    res.status(500).json({ error: err.message });
+    updateLoading('Packaging your ZIP file...');
+    var zip = new JSZip();
+    var folderName = (patternResult.patternData.title || 'MyPattern').replace(/[^a-zA-Z0-9]/g, '_');
+    var folder = zip.folder(folderName);
+    folder.file(folderName + '_Pattern.pdf', patternPdfBytes);
+    folder.file('Hand_Embroidery_Beginners_Guide.pdf', guideBytes);
+    var zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+    var url = URL.createObjectURL(zipBlob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = folderName + '_EmbroideryPack.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+    hideLoading();
+    confetti();
+  } catch(e) {
+    hideLoading();
+    alert('Download failed: ' + e.message);
   }
-});
+}
 
-app.get('/api/models', async (req, res) => {
-  try {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const result = await ai.models.list();
-    const names = [];
-    for await (const m of result) names.push(m.name);
-    res.json(names);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+// ─── LOADING ──────────────────────────────────────────────────────────────────
+function showLoading(text) {
+  document.getElementById('loadingText').textContent = text || 'Loading...';
+  document.getElementById('loadingOverlay').style.display = 'flex';
+}
+function updateLoading(text) {
+  document.getElementById('loadingText').textContent = text;
+}
+function hideLoading() {
+  document.getElementById('loadingOverlay').style.display = 'none';
+}
+
+// ─── CONFETTI ─────────────────────────────────────────────────────────────────
+function confetti() {
+  var c = document.getElementById('cf');
+  var cols = ['#5c7a52','#c97b6b','#c4973a','#7a9e6e','#edf4ea','#faeee9','#fdf3e0','#fff'];
+  for (var i = 0; i < 120; i++) {
+    var p = document.createElement('div');
+    p.className = 'cfp';
+    var sz = Math.random() * 10 + 5;
+    p.style.cssText = 'left:' + Math.random()*100 + '%;width:' + sz + 'px;height:' + sz + 'px;background:' + cols[Math.floor(Math.random()*cols.length)] + ';border-radius:' + (Math.random()>.5?'50%':'3px') + ';animation-duration:' + (Math.random()*2+2.5) + 's;animation-delay:' + (Math.random()*1) + 's;transform:rotate(' + (Math.random()*360) + 'deg)';
+    c.appendChild(p);
+    setTimeout(function() { if(p.parentNode) p.remove(); }, 5000);
   }
-});
-
-app.post('/api/generate-pdf', async (req, res) => {
-  try {
-    const { patternData: pd, patternImageB64, originalImageB64, embroideryPreviewB64 } = req.body;
-    const origSrc  = 'data:image/png;base64,' + originalImageB64;
-    const patSrc   = 'data:image/png;base64,' + patternImageB64;
-    const embSrc   = embroideryPreviewB64 ? 'data:image/png;base64,' + embroideryPreviewB64 : origSrc;
-
-    const colorsHtml = (pd.dmcColors || []).map(c => `
-      <div class="color-chip">
-        <div class="swatch" style="background:${c.hex || '#ccc'}"></div>
-        <div class="color-info">
-          <span class="color-code">DMC ${c.code}</span>
-          <span class="color-name">${c.name}</span>
-        </div>
-      </div>`).join('');
-
-    const hoopPages = HOOPS.map(h => {
-      const px = (mm) => (mm * 3.7795).toFixed(1);
-      return `
-      <div class="page hoop-page">
-        <div class="page-top-bar"></div>
-        <div class="hoop-header">
-          <div class="hoop-brand">Stitchify<span class="hoop-subtitle">${pd.title || 'My Pattern'}</span></div>
-          <div class="hoop-size-label">${h.label}</div>
-        </div>
-        <div class="hoop-sep"></div>
-        <div class="hoop-center">
-          <div style="position:relative;width:${px(h.mm + 14)}px;height:${px(h.mm + 14)}px;display:flex;align-items:center;justify-content:center;">
-            <!-- Hoop ring: decorative only, does NOT clip the pattern -->
-            <div style="position:absolute;inset:0;border-radius:50%;background:conic-gradient(#d4a84b,#c8973a,#e8c06a,#c8973a,#d4a84b);"></div>
-            <div style="position:absolute;inset:5px;border-radius:50%;background:#b8842a;"></div>
-            <div style="position:absolute;inset:10px;border-radius:50%;background:#f9f6f0;"></div>
-            <!-- Pattern: sits on top, square, no circular clip -->
-            <img src="${patSrc}" style="position:relative;width:${px(h.mm * 0.82)}px;height:${px(h.mm * 0.82)}px;object-fit:contain;display:block;z-index:1;">
-          </div>
-          <div class="hoop-label">${h.label}</div>
-        </div>
-        <div class="hoop-footer">
-          <p>Print on A4 - choose "Fit to Page". The hoop guide above is true to size.</p>
-          <p>Happy stitching! We hope you enjoy making this.</p>
-        </div>
-        <div class="page-bottom-bar"></div>
-      </div>`;
-    }).join('');
-
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<style>
-* { box-sizing:border-box; margin:0; padding:0; font-family:'Poppins',sans-serif; }
-.page { width:210mm; min-height:297mm; background:#faf7f4; display:flex; flex-direction:column; page-break-after:always; }
-.page-top-bar { height:8mm; background:#5c7a52; flex-shrink:0; }
-.page-bottom-bar { height:6mm; background:#5c7a52; flex-shrink:0; }
-.cover { align-items:center; }
-.cover-brand { font-size:22pt; font-weight:700; color:#5c7a52; margin:4mm 0 1mm; }
-.cover-sub { font-size:9pt; color:#7a6558; margin-bottom:3mm; }
-.cover-img { width:130mm; height:130mm; object-fit:cover; border-radius:4mm; margin-bottom:3mm; background:#fff; }
-.cover-title { font-size:15pt; font-weight:700; color:#2d2018; margin-bottom:2mm; text-align:center; padding:0 15mm; }
-.cover-desc { font-size:9pt; color:#7a6558; text-align:center; padding:0 18mm; margin-bottom:2mm; line-height:1.5; }
-.cover-badge { background:#edf4ea; color:#5c7a52; font-size:8pt; font-weight:600; padding:1.5mm 5mm; border-radius:10mm; margin-bottom:3mm; }
-.colors-section { width:100%; padding:0 14mm; margin-bottom:2mm; }
-.section-title { font-size:9pt; font-weight:700; color:#2d2018; margin-bottom:2mm; }
-.colors-grid { display:flex; flex-wrap:wrap; gap:2mm; }
-.color-chip { display:flex; align-items:center; gap:2mm; background:#f5efe8; border-radius:10mm; padding:1.5mm 3mm; }
-.swatch { width:7mm; height:7mm; border-radius:50%; border:0.3mm solid rgba(0,0,0,0.12); flex-shrink:0; }
-.color-info { display:flex; flex-direction:column; }
-.color-code { font-size:8pt; font-weight:600; color:#2d2018; }
-.color-name { font-size:7pt; color:#7a6558; }
-.stitch-section { width:100%; padding:0 14mm; }
-.stitch-text { font-size:8pt; color:#7a6558; line-height:1.5; }
-.cover-personal { font-size:7pt; color:#c0a898; text-align:center; margin:2mm 0 2mm; }
-.hoop-header { display:flex; justify-content:space-between; align-items:flex-start; padding:5mm 14mm 3mm; }
-.hoop-brand { font-size:12pt; font-weight:700; color:#5c7a52; display:flex; flex-direction:column; }
-.hoop-subtitle { font-size:9pt; font-weight:400; color:#7a6558; }
-.hoop-size-label { font-size:14pt; font-weight:700; color:#2d2018; }
-.hoop-sep { height:0.3mm; background:#d4c4b8; margin:0 14mm; }
-.hoop-center { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:6mm 0; }
-.hoop-label { font-size:11pt; font-weight:700; color:#2d2018; margin-top:5mm; }
-.hoop-footer { text-align:center; padding:0 14mm 3mm; }
-.hoop-footer p { font-size:7pt; color:#a89080; line-height:1.8; }
-</style></head><body>
-<div class="page cover">
-  <div class="page-top-bar"></div>
-  <div class="cover-brand">Stitchify</div>
-  <div class="cover-sub">Hand Embroidery Pattern</div>
-  <img class="cover-img" src="${embSrc}">
-  <div class="cover-title">${pd.title || 'My Embroidery Pattern'}</div>
-  <div class="cover-desc">${pd.description || ''}</div>
-  <div class="cover-badge">Difficulty: ${pd.difficulty || 'Beginner'}</div>
-  <div class="colors-section">
-    <div class="section-title">DMC Thread Colors</div>
-    <div class="colors-grid">${colorsHtml}</div>
-  </div>
-  <div class="stitch-section">
-    <div class="section-title" style="margin-top:2mm">Stitch Suggestions</div>
-    <div class="stitch-text">${pd.stitchSuggestions || ''}</div>
-  </div>
-  <div class="cover-personal">Happy stitching! We hope you have so much fun bringing this pattern to life.</div>
-  <div class="page-bottom-bar"></div>
-</div>
-${hoopPages}
-<div class="page cover">
-  <div class="page-top-bar"></div>
-  <div class="cover-brand" style="font-size:18pt;margin-top:8mm">Colour Reference</div>
-  <div class="cover-sub">Use this page to guide your thread colour choices while you stitch</div>
-  <img class="cover-img" src="${origSrc}" style="width:170mm;height:170mm;margin-top:6mm;object-fit:contain;">
-  <div class="cover-personal" style="margin-top:auto">Happy stitching! 🧵</div>
-  <div class="page-bottom-bar"></div>
-</div>
-</body></html>`;
-
-    let browser = null;
-    try {
-      browser = await puppeteer.launch({
-        args: chromium.args,
-        defaultViewport: chromium.defaultViewport,
-        executablePath: await chromium.executablePath(),
-        headless: chromium.headless,
-      });
-      const page = await browser.newPage();
-      await page.setRequestInterception(true);
-      page.on('request', (req) => {
-        if (['image', 'stylesheet', 'font'].includes(req.resourceType()) && !req.url().includes('fonts.googleapis') && !req.url().includes('fonts.gstatic')) {
-          req.abort();
-        } else {
-          req.continue();
-        }
-      });
-      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await new Promise(r => setTimeout(r, 2000));
-      const pdfBuffer = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        margin: { top: 0, right: 0, bottom: 0, left: 0 }
-      });
-      res.set({ 'Content-Type': 'application/pdf', 'Content-Length': pdfBuffer.length });
-      res.send(pdfBuffer);
-    } finally {
-      if (browser) await browser.close().catch(() => {});
-    }
-
-  } catch (err) {
-    console.error('PDF error:', err);
-    res.status(500).json({ error: err.message || 'PDF generation failed.' });
-  }
-});
-
-app.get('/beginners-guide.pdf', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'beginners-guide.pdf'));
-});
-
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Stitchify running on port ${PORT}`));
+}
