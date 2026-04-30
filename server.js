@@ -58,7 +58,7 @@ app.post('/api/convert', upload.single('image'), async (req, res) => {
 
     // 1. Gemini text analysis
     const response = await geminiWithRetry(() => ai.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash-preview-05-20',
       contents: [{ role: 'user', parts: [
         { inlineData: { mimeType: originalMime, data: originalB64 } },
         { text: `You are an expert embroidery pattern designer. Analyse this image carefully.
