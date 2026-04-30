@@ -134,6 +134,7 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
     try {
       patternData = JSON.parse(response.text.replace(/```json|```/g, '').trim());
     } catch (e) {
+      console.error('Text analysis JSON parse failed. Raw response:', response.text?.substring(0, 500));
       patternData = {
         title: 'My Embroidery Pattern',
         description: 'A beautiful hand embroidery pattern ready to stitch.',
