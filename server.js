@@ -53,8 +53,59 @@ app.post('/api/convert', upload.single('image'), async (req, res) => {
 
   try {
     const ai = new GoogleGenAI({ apiKey });
-    const originalB64 = req.file.buffer.toString('base64');
-    const originalMime = req.file.mimetype;
+
+    // Auto-crop: remove dark/transparent borders so the design fills the frame.
+    // This prevents the hoop circle from clipping designs that sit in a padded canvas.
+    const croppedBuffer = await (async () => {
+      const { data: raw, info } = await sharp(req.file.buffer)
+        .rotate()
+        .flatten({ background: { r: 255, g: 255, b: 255 } })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const { width, height, channels } = info;
+      let minX = width, minY = height, maxX = 0, maxY = 0;
+
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * channels;
+          const r = raw[i], g = raw[i+1], b = raw[i+2];
+          // Consider a pixel "content" if it's not near-black or near-white background
+          // Near-black: all channels < 40 (transparent/black bg)
+          // For white-bg images we skip this — just crop near-black
+          if (!(r < 40 && g < 40 && b < 40)) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      // Add a small padding around the detected content
+      const pad = Math.round(Math.min(width, height) * 0.03);
+      minX = Math.max(0, minX - pad);
+      minY = Math.max(0, minY - pad);
+      maxX = Math.min(width - 1, maxX + pad);
+      maxY = Math.min(height - 1, maxY + pad);
+
+      const cropW = maxX - minX + 1;
+      const cropH = maxY - minY + 1;
+
+      // Only crop if we found a meaningful content area (> 20% of original)
+      if (cropW > width * 0.2 && cropH > height * 0.2 && (cropW < width * 0.95 || cropH < height * 0.95)) {
+        return sharp(req.file.buffer)
+          .rotate()
+          .extract({ left: minX, top: minY, width: cropW, height: cropH })
+          .png()
+          .toBuffer();
+      }
+      // No meaningful crop found, use original
+      return req.file.buffer;
+    })();
+
+    const originalB64 = croppedBuffer.toString('base64');
+    const originalMime = 'image/png';
 
     // 1. Gemini text analysis
     const response = await geminiWithRetry(() => ai.models.generateContent({
@@ -134,8 +185,8 @@ Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Retur
       patternImageB64 = fallbackBuffer.toString('base64');
     }
 
-        const originalResized = await sharp(req.file.buffer)
-      .rotate()
+        // Use the already-cropped buffer for the original preview too
+    const originalResized = await sharp(croppedBuffer)
       .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
       .flatten({ background: { r: 255, g: 255, b: 255 } })
       .png().toBuffer();
