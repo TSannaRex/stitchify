@@ -72,10 +72,12 @@ body { font-family: 'Poppins', sans-serif; background: #faf7f4; min-height: 100v
 .ptab { flex: 1; padding: 7px; background: var(--warm); border: 1.5px solid var(--border); border-radius: 8px; font-family: 'Poppins', sans-serif; font-size: 12px; font-weight: 500; color: var(--muted); cursor: pointer; transition: .2s; }
 .ptab.active { background: var(--sage); color: #fff; border-color: var(--sage); }
 
-/* HOOP PREVIEW - sized to fill the left column, contain so full design is always visible */
-.hoop-preview-wrap { display: flex; align-items: center; justify-content: center; background: var(--warm); border-radius: 16px; padding: 16px; }
-.hoop-circle { width: 280px; height: 280px; border-radius: 50%; border: 8px solid #b8955a; box-shadow: 0 0 0 3px #d4b078, 0 4px 20px rgba(0,0,0,.15); overflow: hidden; display: flex; align-items: center; justify-content: center; background: #f9f6f0; flex-shrink: 0; }
-.hoop-circle img { width: 88%; height: 88%; object-fit: contain; display: block; }
+/* HOOP PREVIEW - ring is pure decoration, pattern image is NEVER clipped */
+.hoop-preview-wrap { display: flex; align-items: center; justify-content: center; background: var(--warm); border-radius: 16px; padding: 20px; }
+.hoop-circle { position: relative; width: 300px; height: 300px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.hoop-circle::before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(#d4a84b,#c8973a,#e8c06a,#c8973a,#d4a84b); z-index: 0; }
+.hoop-circle::after { content: ''; position: absolute; inset: 8px; border-radius: 50%; background: #f9f6f0; z-index: 1; }
+.hoop-circle img { position: relative; z-index: 2; width: 82%; height: 82%; object-fit: contain; display: block; }
 
 .result-info h3 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
 .pattern-desc { font-size: 13px; color: var(--muted); margin-bottom: 14px; line-height: 1.6; }
