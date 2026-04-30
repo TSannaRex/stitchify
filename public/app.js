@@ -63,6 +63,8 @@ async function convert() {
     updateLoading('Almost there...');
     patternResult = data;
     showResult(data);
+    // Auto-load embroidery preview in background so it's ready for the PDF
+    loadEmbroideryPreview();
 
   } catch (e) {
     hideLoading();
@@ -138,6 +140,8 @@ function switchPreview(type, evt) {
 // ─── EMBROIDERY PREVIEW (lazy) ────────────────────────────────────────────────
 async function loadEmbroideryPreview() {
   if (!selectedFile) return;
+  if (loadEmbroideryPreview._inProgress) return;  // prevent duplicate calls
+  loadEmbroideryPreview._inProgress = true;
 
   var embImg = document.getElementById('embroideryPreviewImg');
   var hoop   = document.querySelector('.hoop-circle');
@@ -165,6 +169,7 @@ async function loadEmbroideryPreview() {
   } finally {
     embImg.style.opacity = '1';
     if (hoop) hoop.style.opacity = '1';
+    loadEmbroideryPreview._inProgress = false;
   }
 }
 
@@ -370,6 +375,14 @@ async function generatePatternPDF() {
 async function downloadZip() {
   showLoading('Creating your pattern PDF...');
   try {
+    // If embroidery preview hasn't loaded yet, wait for it (max 30s)
+    if (!patternResult.embroideryPreviewB64) {
+      updateLoading('Finishing embroidery preview...');
+      const start = Date.now();
+      while (!patternResult.embroideryPreviewB64 && Date.now() - start < 30000) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
     updateLoading('Generating PDF with Poppins font...');
     var pdfRes = await fetch('/api/generate-pdf', {
       method: 'POST',
