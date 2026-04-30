@@ -189,7 +189,7 @@ function clipImageToCircle(dataUrl) {
       ctx.arc(size/2, size/2, size/2, 0, Math.PI * 2);
       ctx.closePath();
       ctx.clip();
-      var scale = Math.max(size / img.width, size / img.height);
+      var scale = Math.min(size / img.width, size / img.height);
       var drawW = img.width * scale;
       var drawH = img.height * scale;
       var drawX = (size - drawW) / 2;
