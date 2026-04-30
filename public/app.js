@@ -79,15 +79,12 @@ function showResult(data) {
   document.getElementById('patternPreviewImg').src = 'data:image/png;base64,' + data.patternImageB64;
   document.getElementById('originalPreviewImg').src = 'data:image/png;base64,' + data.originalImageB64;
 
-  // ── Embroidery preview tab ──────────────────────────────────────────────────
+  // Always show the embroidery tab — it lazy-loads when clicked
   var embTab = document.getElementById('embroideryTab');
   var embImg = document.getElementById('embroideryPreviewImg');
-  if (data.embroideryPreviewB64) {
-    embImg.src = 'data:image/png;base64,' + data.embroideryPreviewB64;
-    embTab.style.display = '';          // show the tab
-  } else {
-    embTab.style.display = 'none';      // hide if generation failed
-  }
+  embImg.removeAttribute('data-loaded');  // reset so it reloads for new image
+  embImg.src = '';
+  embTab.style.display = '';              // always show the tab
 
   document.getElementById('patternTitle').textContent = pd.title || 'My Pattern';
   document.getElementById('patternDesc').textContent = pd.description || '';
@@ -117,20 +114,58 @@ function showResult(data) {
 
 // ─── PREVIEW TOGGLE ───────────────────────────────────────────────────────────
 function switchPreview(type, evt) {
-  // Update active tab
   document.querySelectorAll('.ptab').forEach(function(t) { t.classList.remove('active'); });
   if (evt) {
     evt.target.classList.add('active');
   } else {
-    // Called programmatically — find the matching tab by data-type
     var tab = document.querySelector('.ptab[data-type="' + type + '"]');
     if (tab) tab.classList.add('active');
   }
 
-  // Show/hide images
   document.getElementById('patternPreviewImg').style.display    = type === 'pattern'    ? 'block' : 'none';
   document.getElementById('originalPreviewImg').style.display   = type === 'original'   ? 'block' : 'none';
   document.getElementById('embroideryPreviewImg').style.display = type === 'embroidery' ? 'block' : 'none';
+
+  // Lazy-load the embroidery preview on first click
+  if (type === 'embroidery') {
+    var embImg = document.getElementById('embroideryPreviewImg');
+    if (!embImg.getAttribute('data-loaded')) {
+      loadEmbroideryPreview();
+    }
+  }
+}
+
+// ─── EMBROIDERY PREVIEW (lazy) ────────────────────────────────────────────────
+async function loadEmbroideryPreview() {
+  if (!selectedFile) return;
+
+  var embImg = document.getElementById('embroideryPreviewImg');
+  var hoop   = document.querySelector('.hoop-circle');
+
+  // Show a subtle loading state
+  embImg.style.opacity = '0.3';
+  if (hoop) hoop.style.opacity = '0.5';
+
+  try {
+    var fd = new FormData();
+    fd.append('image', selectedFile);
+    var res  = await fetch('/api/preview', { method: 'POST', body: fd });
+    var data = await res.json();
+
+    if (data.embroideryPreviewB64) {
+      embImg.src = 'data:image/png;base64,' + data.embroideryPreviewB64;
+      embImg.setAttribute('data-loaded', 'true');
+      // Store on patternResult so the PDF can use it
+      if (patternResult) patternResult.embroideryPreviewB64 = data.embroideryPreviewB64;
+    } else {
+      console.warn('No embroidery preview returned:', data.error || '');
+    }
+  } catch (e) {
+    console.warn('Embroidery preview failed:', e.message);
+  } finally {
+    embImg.style.opacity = '1';
+    if (hoop) hoop.style.opacity = '1';
+  }
 }
 
 // ─── CIRCLE CLIP HELPER ───────────────────────────────────────────────────────
@@ -343,7 +378,7 @@ async function downloadZip() {
         patternData: patternResult.patternData,
         patternImageB64: patternResult.patternImageB64,
         originalImageB64: patternResult.originalImageB64,
-        embroideryPreviewB64: patternResult.embroideryPreviewB64
+        embroideryPreviewB64: patternResult.embroideryPreviewB64 || null
       })
     });
     if (!pdfRes.ok) {
