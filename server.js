@@ -1,275 +1,383 @@
 import express from 'express';
+import { GoogleGenAI } from '@google/genai';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import archiver from 'archiver';
-import { GoogleGenAI } from '@google/genai';
-import puppeteerLib from 'puppeteer-core';
-import chromiumLib from '@sparticuz/chromium';
-import { createRequire } from 'module';
+import sharp from 'sharp';
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 
-const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const app  = express();
+const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
-app.use(express.json({ limit: '25mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json({ limit: '30mb' }));
+app.use(express.static(__dirname + '/public'));
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const HOOPS = [
+  { label: '3" Hoop', mm: 76.2  },
+  { label: '4" Hoop', mm: 101.6 },
+  { label: '5" Hoop', mm: 127.0 },
+  { label: '6" Hoop', mm: 152.4 },
+  { label: '7" Hoop', mm: 177.8 },
+  { label: '8" Hoop', mm: 203.2 },
+];
 
-// ─── Frustum math (server-side copy) ────────────────────────────────────────
-const Frustum = require('./public/frustum.js');
-
-// ─── Gemini analysis ─────────────────────────────────────────────────────────
-app.post('/api/analyze', upload.single('image'), async (req, res) => {
-  try {
-    const b64 = req.file.buffer.toString('base64');
-    const mime = req.file.mimetype;
-    const sizeKey = req.body.sizeKey || '16oz';
-    const params = Frustum.compute(sizeKey, 10);
-
-    const prompt = `You are analyzing a design image that will be printed as a tumbler wrap for a ${params.label} cup.
-The wrap will be ${Math.round(params.outerArc)}mm wide at the top and ${Math.round(params.innerArc)}mm wide at the bottom, ${Math.round(params.slant)}mm tall.
-The image resolution is approximately ${req.file.size > 500000 ? 'high' : 'low'} based on file size.
-
-Respond ONLY with valid JSON, no markdown, no backticks:
-{
-  "style": "2-4 word style description (e.g. 'boho floral watercolor')",
-  "colors": ["#hex1","#hex2","#hex3","#hex4","#hex5"],
-  "colorNames": ["name1","name2","name3","name4","name5"],
-  "mood": "one sentence describing the feel of the design",
-  "printQuality": "good|fair|low",
-  "printNote": "one sentence about print quality for this wrap size",
-  "recommendation": "one practical tip for best print result"
-}`;
-
-    const result = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [{
-        role: 'user',
-        parts: [
-          { inlineData: { mimeType: mime, data: b64 } },
-          { text: prompt }
-        ]
-      }]
-    });
-
-    let json;
+// ── Gemini retry helper ────────────────────────────────────────────────────
+// Retries a Gemini API call up to maxRetries times with exponential backoff.
+// Catches 429 (rate limit) and 503 (overload) errors automatically.
+async function geminiWithRetry(fn, maxRetries = 4) {
+  let delay = 2000;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const text = result.candidates[0].content.parts[0].text.trim()
-        .replace(/```json/g,'').replace(/```/g,'').trim();
-      json = JSON.parse(text);
-    } catch {
-      json = {
-        style: 'Custom design',
-        colors: ['#e8b4b8','#a8d8ea','#f7e7ce','#cce2cb','#b8b3c8'],
-        colorNames: ['Rose','Sky','Cream','Sage','Lavender'],
-        mood: 'A beautiful design ready to wrap your tumbler.',
-        printQuality: 'good',
-        printNote: 'Design looks good for this wrap size.',
-        recommendation: 'Ensure your image is at least 150dpi for crisp results.'
+      return await fn();
+    } catch (err) {
+      const msg = err.message || '';
+      const is429 = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('Resource exhausted');
+      const is503 = msg.includes('503') || msg.includes('UNAVAILABLE');
+      if ((is429 || is503) && attempt < maxRetries) {
+        console.warn(`Gemini rate limit hit (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        delay *= 2; // exponential backoff: 2s, 4s, 8s, 16s
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
+app.post('/api/convert', upload.single('image'), async (req, res) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not set.' });
+  if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
+
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Auto-crop: remove dark/transparent borders so the design fills the frame.
+    // This prevents the hoop circle from clipping designs that sit in a padded canvas.
+    const croppedBuffer = await (async () => {
+      const { data: raw, info } = await sharp(req.file.buffer)
+        .rotate()
+        .flatten({ background: { r: 255, g: 255, b: 255 } })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const { width, height, channels } = info;
+      let minX = width, minY = height, maxX = 0, maxY = 0;
+
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * channels;
+          const r = raw[i], g = raw[i+1], b = raw[i+2];
+          // Consider a pixel "content" if it's not near-black or near-white background
+          // Near-black: all channels < 40 (transparent/black bg)
+          // For white-bg images we skip this — just crop near-black
+          const isBlackBg = r < 40 && g < 40 && b < 40;
+          const isWhiteBg = r > 240 && g > 240 && b > 240;
+          if (!isBlackBg && !isWhiteBg) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      // Add a small padding around the detected content
+      const pad = Math.round(Math.min(width, height) * 0.08);
+      minX = Math.max(0, minX - pad);
+      minY = Math.max(0, minY - pad);
+      maxX = Math.min(width - 1, maxX + pad);
+      maxY = Math.min(height - 1, maxY + pad);
+
+      const cropW = maxX - minX + 1;
+      const cropH = maxY - minY + 1;
+
+      // Only crop if we found a meaningful content area (> 20% of original)
+      if (cropW > width * 0.2 && cropH > height * 0.2 && (cropW < width * 0.95 || cropH < height * 0.95)) {
+        return sharp(req.file.buffer)
+          .rotate()
+          .extract({ left: minX, top: minY, width: cropW, height: cropH })
+          .png()
+          .toBuffer();
+      }
+      // No meaningful crop found, use original
+      return req.file.buffer;
+    })();
+
+    // Use original (uncropped) image for text analysis so Gemini gets full context
+    const originalB64 = req.file.buffer.toString('base64');
+    const originalMime = req.file.mimetype;
+    // Use cropped image for pattern/embroidery generation
+    const croppedB64 = croppedBuffer.toString('base64');
+
+    // 1. Gemini text analysis
+    const response = await geminiWithRetry(() => ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [
+        { inlineData: { mimeType: originalMime, data: originalB64 } },
+        { text: `You are an expert embroidery pattern designer. Analyse this image carefully.
+Return a JSON object with these exact fields:
+{
+  "title": "short descriptive title of the main subject",
+  "description": "one warm sentence describing what this embroidery pattern depicts",
+  "dmcColors": [{ "code": "DMC code", "name": "color name", "hex": "#hexcode", "area": "what part" }],
+  "stitchSuggestions": "2-3 sentences suggesting stitches",
+  "difficulty": "Beginner / Intermediate / Advanced"
+}
+Suggest 3-6 DMC thread colors. Use real DMC codes and accurate hex values. Return ONLY the JSON.` }
+      ]}],
+    }));
+
+    let patternData;
+    try {
+      patternData = JSON.parse(response.text.replace(/```json|```/g, '').trim());
+    } catch (e) {
+      console.error('Text analysis JSON parse failed. Raw response:', response.text?.substring(0, 500));
+      patternData = {
+        title: 'My Embroidery Pattern',
+        description: 'A beautiful hand embroidery pattern ready to stitch.',
+        dmcColors: [{ code: '310', name: 'Black', hex: '#000000', area: 'Outlines' }],
+        stitchSuggestions: 'Use back stitch for outlines, satin stitch for fills, French knots for texture.',
+        difficulty: 'Beginner'
       };
     }
-    res.json(json);
+
+    // 2. Embroidery preview is generated on-demand via /api/preview endpoint
+    // to avoid burning 3x quota on every single convert request.
+    const embroideryPreviewB64 = null;
+
+    // Small pause between API calls to stay within per-minute rate limits
+    await new Promise(r => setTimeout(r, 1000));
+
+    // 3. Pattern processing - ask Gemini to generate a coloring page version.
+    // gemini-3.1-flash-image-preview supports image input + image output.
+    let patternImageB64 = null;
+    try {
+      const patternResponse = await geminiWithRetry(() => ai.models.generateContent({
+        model: 'gemini-3.1-flash-image-preview',
+        contents: [{ role: 'user', parts: [
+          { inlineData: { mimeType: 'image/png', data: croppedB64 } },
+          { text: 'Turn this into a coloring page. White background, black outlines only, no fills, no shading.' }
+        ]}],
+        generationConfig: { responseModalities: ['IMAGE'] },
+      }));
+
+      for (const part of patternResponse.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData?.mimeType?.startsWith('image/')) {
+          // Post-process: force lines to pure black, background to pure white
+          // Gemini sometimes outputs grey lines — normalise + threshold fixes this
+          const rawBuf = Buffer.from(part.inlineData.data, 'base64');
+          // Force pure black lines — Gemini sometimes outputs grey
+          const cleanBuf = await sharp(rawBuf)
+            .greyscale()
+            .normalise()
+            .threshold(180)
+            .png()
+            .toBuffer();
+          patternImageB64 = cleanBuf.toString('base64');
+          break;
+        }
+      }
+      if (!patternImageB64) console.warn('Pattern gen: no image part in response');
+    } catch (patErr) {
+      console.error('Pattern generation FAILED:', patErr.message);
+      console.error('Pattern generation error details:', JSON.stringify(patErr, null, 2));
+    }
+
+    // Fallback: if Gemini image gen failed, use simple Sharp threshold
+    if (!patternImageB64) {
+      const sensitivity = parseInt(req.body.sensitivity) || 128;
+      const binaryThreshold = Math.round(240 - ((sensitivity - 50) / 170) * 180);
+      const fallbackBuffer = await sharp(req.file.buffer)
+        .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+        .flatten({ background: { r: 255, g: 255, b: 255 } })
+        .greyscale()
+        .normalise()
+        .threshold(binaryThreshold)
+        .png()
+        .toBuffer();
+      patternImageB64 = fallbackBuffer.toString('base64');
+    }
+
+        // Use the already-cropped buffer for the original preview too
+    const originalResized = await sharp(croppedBuffer)
+      .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .png().toBuffer();
+
+    res.json({
+      patternData,
+      patternImageB64,
+      originalImageB64:    originalResized.toString('base64'),
+      embroideryPreviewB64,
+    });
+
   } catch (err) {
-    console.error('Analyze error:', err);
+    console.error('Convert error:', err);
+    res.status(500).json({ error: err.message || 'Conversion failed.' });
+  }
+});
+
+// On-demand embroidery preview — only called when user clicks the Embroidered tab
+app.post('/api/preview', upload.single('image'), async (req, res) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not set.' });
+  if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
+
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const originalB64 = req.file.buffer.toString('base64');
+    const originalMime = req.file.mimetype;
+
+    const imgResponse = await geminiWithRetry(() => ai.models.generateContent({
+      model: 'gemini-3.1-flash-image-preview',
+      contents: [{ role: 'user', parts: [
+        { inlineData: { mimeType: 'image/png', data: croppedB64 } },
+        { text: `Transform this image into a photo-realistic hand embroidery artwork on natural linen fabric stretched in a wooden embroidery hoop. The embroidery should use colorful silk threads with visible stitch texture - satin stitch for filled areas, back stitch for outlines, French knots for details. The wooden hoop should be clearly visible around the edge. The linen fabric should have a natural off-white texture. Soft, warm studio lighting. Professional embroidery photography style.` }
+      ]}],
+      generationConfig: { responseModalities: ['IMAGE'] },
+    }));
+
+    let embroideryPreviewB64 = null;
+    for (const part of imgResponse.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData?.mimeType?.startsWith('image/')) {
+        embroideryPreviewB64 = part.inlineData.data;
+        break;
+      }
+    }
+
+    if (!embroideryPreviewB64) return res.status(500).json({ error: 'No image generated.' });
+    res.json({ embroideryPreviewB64 });
+
+  } catch (err) {
+    console.error('Preview error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ─── Generate PDF + SVG + ZIP ─────────────────────────────────────────────────
-app.post('/api/generate', upload.single('image'), async (req, res) => {
+app.get('/api/models', async (req, res) => {
   try {
-    const sizeKey   = req.body.sizeKey || '16oz';
-    const overlapMm = parseFloat(req.body.overlapMm) || 10;
-    const analysisJson = req.body.analysis ? JSON.parse(req.body.analysis) : null;
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const result = await ai.models.list();
+    const names = [];
+    for await (const m of result) names.push(m.name);
+    res.json(names);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    const params = Frustum.compute(sizeKey, overlapMm);
-    const b64Image = req.file.buffer.toString('base64');
-    const mime = req.file.mimetype;
+app.post('/api/generate-pdf', async (req, res) => {
+  try {
+    const { patternData: pd, patternImageB64, originalImageB64, embroideryPreviewB64 } = req.body;
+    const origSrc  = 'data:image/png;base64,' + originalImageB64;
+    const patSrc   = 'data:image/png;base64,' + patternImageB64;
+    const embSrc   = embroideryPreviewB64 ? 'data:image/png;base64,' + embroideryPreviewB64 : origSrc;
 
-    // ── Generate SVG cutfile ──────────────────────────────────────────────────
-    const { compute, arcPath, boundingBox } = Frustum;
-    const bbox  = boundingBox(params);
-    const scale = 3.7795; // mm to px at 96dpi
-    const sw    = bbox.width  * scale;
-    const sh    = bbox.height * scale;
-    const cx    = bbox.cx     * scale;
-    const cy    = bbox.cy     * scale;
-
-    const paths = arcPath(params, scale);
-
-    const svgCutfile = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" 
-     width="${sw.toFixed(1)}px" height="${sh.toFixed(1)}px"
-     viewBox="0 0 ${sw.toFixed(1)} ${sh.toFixed(1)}"
-     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
-  <title>Tumbler Wrap Cutfile - ${params.label}</title>
-  <desc>Annular sector cut path for ${params.label} tumbler. Top arc: ${Math.round(params.outerArc)}mm, Bottom arc: ${Math.round(params.innerArc)}mm, Height: ${Math.round(params.slant)}mm. Overlap: ${overlapMm}mm.</desc>
-  <g transform="translate(${cx.toFixed(1)}, ${cy.toFixed(1)})">
-    <!-- Cut line -->
-    <path d="${paths.d}" 
-          fill="none" 
-          stroke="#000000" 
-          stroke-width="0.5"
-          inkscape:label="Cut line"/>
-    <!-- Overlap indicator (score/fold line) -->
-    <path d="${paths.overlapLine}"
-          fill="none"
-          stroke="#000000"
-          stroke-width="0.5"
-          stroke-dasharray="4,3"
-          inkscape:label="Overlap fold line"/>
-  </g>
-</svg>`;
-
-    // ── Generate PDF via Puppeteer ────────────────────────────────────────────
-    const chromium = chromiumLib;
-    const puppeteer = puppeteerLib;
-
-    const styleBlock = analysisJson ? analysisJson.colors.slice(0,5).map((c,i) =>
-      `.swatch-${i} { background: ${c}; }`
-    ).join('\n') : '';
-
-    const htmlContent = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Poppins', sans-serif; background: white; width: 210mm; min-height: 297mm; }
-  .page { padding: 14mm 14mm 10mm; }
-
-  /* Header */
-  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8mm; border-bottom: 0.3mm solid #e5e5e5; padding-bottom: 5mm; }
-  .brand { font-size: 9pt; font-weight: 600; color: #5C5BD4; letter-spacing: 0.06em; text-transform: uppercase; }
-  .size-badge { background: #EEEDFE; color: #3C3489; font-size: 8pt; font-weight: 600; padding: 3px 10px; border-radius: 12px; }
-
-  /* Wrap canvas area */
-  .wrap-canvas { width: 100%; background: #f9f9fb; border: 0.3mm solid #e5e5e5; border-radius: 3mm; padding: 8mm; display: flex; align-items: center; justify-content: center; margin-bottom: 6mm; position: relative; min-height: 80mm; }
-  .wrap-svg { display: block; }
-
-  /* Specs row */
-  .specs { display: flex; gap: 4mm; margin-bottom: 6mm; }
-  .spec { flex: 1; background: #f4f4f8; border-radius: 2mm; padding: 4mm; }
-  .spec-label { font-size: 6.5pt; color: #888; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 1.5mm; }
-  .spec-value { font-size: 9pt; font-weight: 500; color: #1a1a2e; }
-
-  /* AI analysis panel */
-  .ai-panel { background: #EEEDFE; border-radius: 3mm; padding: 5mm 6mm; margin-bottom: 6mm; }
-  .ai-label { font-size: 6.5pt; font-weight: 600; color: #534AB7; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3mm; }
-  .ai-row { display: flex; align-items: flex-start; gap: 6mm; }
-  .ai-swatches { display: flex; gap: 2mm; align-items: center; }
-  .swatch { width: 10mm; height: 10mm; border-radius: 1.5mm; border: 0.2mm solid rgba(0,0,0,0.1); }
-  .ai-text { flex: 1; }
-  .ai-style { font-size: 8.5pt; font-weight: 500; color: #3C3489; margin-bottom: 1.5mm; }
-  .ai-mood  { font-size: 7.5pt; color: #534AB7; line-height: 1.5; margin-bottom: 1.5mm; }
-  .ai-note  { font-size: 7pt; color: #7B7AE0; }
-
-  /* Quality badge */
-  .quality-good  { background: #EAF3DE; color: #27500A; padding: 2px 8px; border-radius: 10px; font-size: 7pt; font-weight: 600; display: inline-block; }
-  .quality-fair  { background: #FAEEDA; color: #633806; padding: 2px 8px; border-radius: 10px; font-size: 7pt; font-weight: 600; display: inline-block; }
-  .quality-low   { background: #FCEBEB; color: #501313; padding: 2px 8px; border-radius: 10px; font-size: 7pt; font-weight: 600; display: inline-block; }
-
-  /* Print tip */
-  .tip { border-left: 0.6mm solid #5C5BD4; padding-left: 3.5mm; margin-bottom: 6mm; }
-  .tip-label { font-size: 6.5pt; font-weight: 600; color: #5C5BD4; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 1mm; }
-  .tip-text  { font-size: 7.5pt; color: #555; line-height: 1.5; }
-
-  /* Footer */
-  .footer { border-top: 0.3mm solid #e5e5e5; padding-top: 4mm; display: flex; justify-content: space-between; align-items: center; }
-  .footer-text { font-size: 6.5pt; color: #aaa; }
-
-  ${styleBlock}
-
-  /* Page 2: design-only sheet */
-  .page2 { page-break-before: always; padding: 10mm; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 297mm; background: white; }
-  .page2-label { font-size: 7.5pt; color: #888; margin-bottom: 5mm; text-transform: uppercase; letter-spacing: 0.06em; }
-  .page2 img { max-width: 100%; max-height: 240mm; display: block; }
-  .cut-note { margin-top: 5mm; font-size: 7pt; color: #aaa; text-align: center; }
-
-  /* Crop marks */
-  .cropmark { position: absolute; width: 3mm; height: 0.2mm; background: #999; }
-  .cropmark-v { width: 0.2mm; height: 3mm; }
-</style>
-</head>
-<body>
-
-<!-- PAGE 1: Info + wrap preview -->
-<div class="page">
-  <div class="header">
-    <div class="brand">Tumblerify</div>
-    <div class="size-badge">${params.label} Tumbler Wrap</div>
-  </div>
-
-  <!-- Wrap arc SVG preview with design clipped inside -->
-  <div class="wrap-canvas">
-    ${generateWrapSVGForPDF(params, b64Image, mime)}
-  </div>
-
-  <!-- Specs -->
-  <div class="specs">
-    <div class="spec">
-      <div class="spec-label">Top circumference</div>
-      <div class="spec-value">${Math.round(params.outerArc)} mm</div>
-    </div>
-    <div class="spec">
-      <div class="spec-label">Bottom circumference</div>
-      <div class="spec-value">${Math.round(params.innerArc)} mm</div>
-    </div>
-    <div class="spec">
-      <div class="spec-label">Wrap height (slant)</div>
-      <div class="spec-value">${Math.round(params.slant)} mm</div>
-    </div>
-    <div class="spec">
-      <div class="spec-label">Overlap tab</div>
-      <div class="spec-value">${overlapMm} mm</div>
-    </div>
-  </div>
-
-  ${analysisJson ? `
-  <!-- AI panel -->
-  <div class="ai-panel">
-    <div class="ai-label">AI Design Analysis</div>
-    <div class="ai-row">
-      <div class="ai-swatches">
-        ${analysisJson.colors.slice(0,5).map((c,i) => `<div class="swatch" style="background:${c};"></div>`).join('')}
-      </div>
-      <div class="ai-text">
-        <div class="ai-style">${analysisJson.style} &nbsp;
-          <span class="quality-${analysisJson.printQuality}">${analysisJson.printQuality === 'good' ? 'Print ready' : analysisJson.printQuality === 'fair' ? 'Check resolution' : 'Low resolution'}</span>
+    const colorsHtml = (pd.dmcColors || []).map(c => `
+      <div class="color-chip">
+        <div class="swatch" style="background:${c.hex || '#ccc'}"></div>
+        <div class="color-info">
+          <span class="color-code">DMC ${c.code}</span>
+          <span class="color-name">${c.name}</span>
         </div>
-        <div class="ai-mood">${analysisJson.mood}</div>
-        <div class="ai-note">${analysisJson.printNote}</div>
-      </div>
-    </div>
-  </div>
+      </div>`).join('');
 
-  <!-- Tip -->
-  <div class="tip">
-    <div class="tip-label">Print tip</div>
-    <div class="tip-text">${analysisJson.recommendation}</div>
-  </div>
-  ` : ''}
+    const hoopPages = HOOPS.map(h => {
+      const px = (mm) => (mm * 3.7795).toFixed(1);
+      return `
+      <div class="page hoop-page">
+        <div class="page-top-bar"></div>
+        <div class="hoop-header">
+          <div class="hoop-brand">Stitchify<span class="hoop-subtitle">${pd.title || 'My Pattern'}</span></div>
+          <div class="hoop-size-label">${h.label}</div>
+        </div>
+        <div class="hoop-sep"></div>
+        <div class="hoop-center">
+          <div style="width:${px(h.mm + 14)}px;height:${px(h.mm + 14)}px;border-radius:50%;background:conic-gradient(#d4a84b,#c8973a,#e8c06a,#c8973a,#d4a84b);display:flex;align-items:center;justify-content:center;">
+            <div style="width:${px(h.mm + 4)}px;height:${px(h.mm + 4)}px;border-radius:50%;background:#b8842a;display:flex;align-items:center;justify-content:center;">
+              <div style="width:${px(h.mm)}px;height:${px(h.mm)}px;border-radius:50%;background:#f9f6f0;overflow:hidden;border:1px dashed #c8b09a;">
+                <img src="${patSrc}" style="width:100%;height:100%;object-fit:contain;display:block;">
+              </div>
+            </div>
+          </div>
+          <div class="hoop-label">${h.label}</div>
+        </div>
+        <div class="hoop-footer">
+          <p>Print on A4 - choose "Fit to Page". The hoop guide above is true to size.</p>
+          <p>Happy stitching! We hope you enjoy making this.</p>
+        </div>
+        <div class="page-bottom-bar"></div>
+      </div>`;
+    }).join('');
 
-  <div class="footer">
-    <div class="footer-text">Generated by Tumblerify &bull; ${params.label} &bull; Arc angle: ${params.sweepDeg.toFixed(1)}°</div>
-    <div class="footer-text">Print at 100% scale — do not scale to fit</div>
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing:border-box; margin:0; padding:0; font-family:'Poppins',sans-serif; }
+.page { width:210mm; min-height:297mm; background:#faf7f4; display:flex; flex-direction:column; page-break-after:always; }
+.page-top-bar { height:8mm; background:#5c7a52; flex-shrink:0; }
+.page-bottom-bar { height:6mm; background:#5c7a52; flex-shrink:0; }
+.cover { align-items:center; }
+.cover-brand { font-size:22pt; font-weight:700; color:#5c7a52; margin:4mm 0 1mm; }
+.cover-sub { font-size:9pt; color:#7a6558; margin-bottom:3mm; }
+.cover-img { width:130mm; height:130mm; object-fit:cover; border-radius:4mm; margin-bottom:3mm; background:#fff; }
+.cover-title { font-size:15pt; font-weight:700; color:#2d2018; margin-bottom:2mm; text-align:center; padding:0 15mm; }
+.cover-desc { font-size:9pt; color:#7a6558; text-align:center; padding:0 18mm; margin-bottom:2mm; line-height:1.5; }
+.cover-badge { background:#edf4ea; color:#5c7a52; font-size:8pt; font-weight:600; padding:1.5mm 5mm; border-radius:10mm; margin-bottom:3mm; }
+.colors-section { width:100%; padding:0 14mm; margin-bottom:2mm; }
+.section-title { font-size:9pt; font-weight:700; color:#2d2018; margin-bottom:2mm; }
+.colors-grid { display:flex; flex-wrap:wrap; gap:2mm; }
+.color-chip { display:flex; align-items:center; gap:2mm; background:#f5efe8; border-radius:10mm; padding:1.5mm 3mm; }
+.swatch { width:7mm; height:7mm; border-radius:50%; border:0.3mm solid rgba(0,0,0,0.12); flex-shrink:0; }
+.color-info { display:flex; flex-direction:column; }
+.color-code { font-size:8pt; font-weight:600; color:#2d2018; }
+.color-name { font-size:7pt; color:#7a6558; }
+.stitch-section { width:100%; padding:0 14mm; }
+.stitch-text { font-size:8pt; color:#7a6558; line-height:1.5; }
+.cover-personal { font-size:7pt; color:#c0a898; text-align:center; margin:2mm 0 2mm; }
+.hoop-header { display:flex; justify-content:space-between; align-items:flex-start; padding:5mm 14mm 3mm; }
+.hoop-brand { font-size:12pt; font-weight:700; color:#5c7a52; display:flex; flex-direction:column; }
+.hoop-subtitle { font-size:9pt; font-weight:400; color:#7a6558; }
+.hoop-size-label { font-size:14pt; font-weight:700; color:#2d2018; }
+.hoop-sep { height:0.3mm; background:#d4c4b8; margin:0 14mm; }
+.hoop-center { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:6mm 0; }
+.hoop-label { font-size:11pt; font-weight:700; color:#2d2018; margin-top:5mm; }
+.hoop-footer { text-align:center; padding:0 14mm 3mm; }
+.hoop-footer p { font-size:7pt; color:#a89080; line-height:1.8; }
+</style></head><body>
+<div class="page cover">
+  <div class="page-top-bar"></div>
+  <div class="cover-brand">Stitchify</div>
+  <div class="cover-sub">Hand Embroidery Pattern</div>
+  <img class="cover-img" src="${embSrc}">
+  <div class="cover-title">${pd.title || 'My Embroidery Pattern'}</div>
+  <div class="cover-desc">${pd.description || ''}</div>
+  <div class="cover-badge">Difficulty: ${pd.difficulty || 'Beginner'}</div>
+  <div class="colors-section">
+    <div class="section-title">DMC Thread Colors</div>
+    <div class="colors-grid">${colorsHtml}</div>
   </div>
+  <div class="stitch-section">
+    <div class="section-title" style="margin-top:2mm">Stitch Suggestions</div>
+    <div class="stitch-text">${pd.stitchSuggestions || ''}</div>
+  </div>
+  <div class="cover-personal">Happy stitching! We hope you have so much fun bringing this pattern to life.</div>
+  <div class="page-bottom-bar"></div>
 </div>
-
-<!-- PAGE 2: Full-bleed design for cutting/printing -->
-<div class="page2">
-  <div class="page2-label">Print & cut sheet — scale 1:1</div>
-  ${generateWrapSVGForPDF(params, b64Image, mime, true)}
-  <div class="cut-note">Cut along outer edge &bull; Score dashed line (overlap tab) &bull; ${overlapMm}mm overlap included</div>
+${hoopPages}
+<div class="page cover">
+  <div class="page-top-bar"></div>
+  <div class="cover-brand" style="font-size:18pt;margin-top:8mm">Colour Reference</div>
+  <div class="cover-sub">Use this page to guide your thread colour choices while you stitch</div>
+  <img class="cover-img" src="${origSrc}" style="width:170mm;height:170mm;margin-top:6mm;object-fit:contain;">
+  <div class="cover-personal" style="margin-top:auto">Happy stitching! 🧵</div>
+  <div class="page-bottom-bar"></div>
 </div>
-
-</body>
-</html>`;
+</body></html>`;
 
     let browser = null;
     try {
@@ -282,79 +390,38 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       const page = await browser.newPage();
       await page.setRequestInterception(true);
       page.on('request', (req) => {
-        if (['image', 'stylesheet', 'font'].includes(req.resourceType()) &&
-            !req.url().includes('fonts.googleapis') &&
-            !req.url().includes('fonts.gstatic')) {
+        if (['image', 'stylesheet', 'font'].includes(req.resourceType()) && !req.url().includes('fonts.googleapis') && !req.url().includes('fonts.gstatic')) {
           req.abort();
         } else {
           req.continue();
         }
       });
-      await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 45000 });
       await new Promise(r => setTimeout(r, 2000));
       const pdfBuffer = await page.pdf({
         format: 'A4',
         printBackground: true,
         margin: { top: 0, right: 0, bottom: 0, left: 0 }
       });
-
-    // ── ZIP both files ────────────────────────────────────────────────────────
-    const sizeName = sizeKey.replace('/','');
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="tumblerify-${sizeName}.zip"`);
-
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    archive.pipe(res);
-    archive.append(pdfBuffer, { name: `tumbler-wrap-${sizeName}.pdf` });
-    archive.append(Buffer.from(svgCutfile), { name: `tumbler-cutfile-${sizeName}.svg` });
-    await archive.finalize();
+      res.set({ 'Content-Type': 'application/pdf', 'Content-Length': pdfBuffer.length });
+      res.send(pdfBuffer);
+    } finally {
+      if (browser) await browser.close().catch(() => {});
+    }
 
   } catch (err) {
-    console.error('Generate error:', err);
-    if (!res.headersSent) res.status(500).json({ error: err.message });
+    console.error('PDF error:', err);
+    res.status(500).json({ error: err.message || 'PDF generation failed.' });
   }
 });
 
-// ─── SVG helper — used inside the PDF HTML ────────────────────────────────────
-function generateWrapSVGForPDF(params, b64Image, mime, fullBleed = false) {
-  const { arcPath, boundingBox } = Frustum;
+app.get('/beginners-guide.pdf', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'beginners-guide.pdf'));
+});
 
-  // Scale to fit nicely on page (A4 inner width ~182mm @ 3.7795px/mm)
-  const maxW = fullBleed ? 182 : 160;
-  const bbox  = boundingBox(params);
-  const scale = Math.min((maxW / bbox.width) * 3.7795, fullBleed ? 5 : 3.5);
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
-  const sw = bbox.width  * scale;
-  const sh = bbox.height * scale;
-  const cx = bbox.cx     * scale;
-  const cy = bbox.cy     * scale;
-
-  const paths = arcPath(params, scale);
-  const clipId = 'wrapClip_' + params.sizeKey + (fullBleed ? '_fb' : '');
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" 
-    width="${sw.toFixed(0)}px" height="${sh.toFixed(0)}px"
-    viewBox="0 0 ${sw.toFixed(0)} ${sh.toFixed(0)}">
-  <defs>
-    <clipPath id="${clipId}">
-      <path d="${paths.d}" transform="translate(${cx.toFixed(0)},${cy.toFixed(0)})"/>
-    </clipPath>
-  </defs>
-  <g transform="translate(${cx.toFixed(0)},${cy.toFixed(0)})">
-    <!-- Design image clipped to arc shape -->
-    <image href="data:${mime};base64,${b64Image}"
-           x="${(-cx).toFixed(0)}" y="0"
-           width="${sw.toFixed(0)}" height="${sh.toFixed(0)}"
-           preserveAspectRatio="xMidYMid slice"
-           clip-path="url(#${clipId})"/>
-    <!-- Cut outline -->
-    <path d="${paths.d}" fill="none" stroke="${fullBleed ? '#000' : '#5C5BD4'}" stroke-width="${fullBleed ? 1 : 1.5}"/>
-    <!-- Overlap dashed line -->
-    <path d="${paths.overlapLine}" fill="none" stroke="${fullBleed ? '#444' : '#9999e0'}" stroke-width="1" stroke-dasharray="5,4"/>
-  </g>
-</svg>`;
-}
-
-// ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Tumblerify running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Stitchify running on port ${PORT}`));
