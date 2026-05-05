@@ -1,154 +1,1006 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stitchify – Turn Any Image Into an Embroidery Pattern</title>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tumblerify — Tumbler Wrap Generator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:wght@500;600;700&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    --bg:        #F8F6F2;
+    --card:      #FFFFFF;
+    --border:    #E8E2D6;
+    --border-strong: #D4CCBC;
+    --text:      #1A1A1A;
+    --muted:     #6B6359;
+    --primary:   #6B46C1;
+    --primary-dark: #553C9A;
+    --primary-light: #F5F0FB;
+    --accent:    #EC4899;
+    --success:   #059669;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+    --shadow:    0 4px 12px rgba(0,0,0,0.06);
+    --shadow-lg: 0 12px 32px rgba(0,0,0,0.10);
+    --radius:    14px;
+    --radius-sm: 8px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px 80px; }
+
+  /* Header */
+  .header { text-align: center; margin-bottom: 40px; }
+  .logo {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 32px;
+    color: var(--text); margin-bottom: 8px;
+  }
+  .logo-mark {
+    width: 36px; height: 44px; position: relative;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    border-radius: 4px 4px 18px 18px;
+    box-shadow: inset -3px 0 6px rgba(0,0,0,0.15);
+  }
+  .logo-mark::after {
+    content: ''; position: absolute; top: -4px; left: 50%; transform: translateX(-50%);
+    width: 32px; height: 6px; background: #C9C2B0; border-radius: 3px;
+  }
+  .tagline { color: var(--muted); font-size: 15px; }
+
+  /* Steps */
+  .step { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 28px; margin-bottom: 18px; box-shadow: var(--shadow-sm); }
+  .step-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .step-num {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--primary); color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 14px; flex-shrink: 0;
+  }
+  .step-title { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 600; margin: 0; }
+  .step-desc { color: var(--muted); font-size: 14px; margin: -4px 0 18px 40px; }
+
+  /* Mode tabs */
+  .mode-tabs {
+    display: flex; gap: 8px; margin-bottom: 20px;
+    background: #F2EDE2; padding: 4px; border-radius: 10px;
+  }
+  .mode-tab {
+    flex: 1; background: transparent; border: none; padding: 10px 14px;
+    font-family: inherit; font-size: 14px; font-weight: 500;
+    color: var(--muted); cursor: pointer; border-radius: 7px;
+    transition: all 0.15s ease;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .mode-tab.active { background: white; color: var(--text); box-shadow: var(--shadow-sm); }
+  .mode-tab:disabled { opacity: 0.45; cursor: not-allowed; }
+  .mode-tab .lock { font-size: 11px; }
+
+  /* Upload zone */
+  .upload-zone {
+    border: 2px dashed var(--border-strong); border-radius: var(--radius);
+    padding: 40px 24px; text-align: center; cursor: pointer;
+    transition: all 0.2s ease; background: #FCFBF8;
+  }
+  .upload-zone:hover, .upload-zone.dragging {
+    border-color: var(--primary); background: var(--primary-light); transform: translateY(-1px);
+  }
+  .upload-zone.has-file { padding: 16px; text-align: left; }
+  .upload-icon { font-size: 32px; margin-bottom: 10px; }
+  .upload-text { font-weight: 500; margin-bottom: 4px; }
+  .upload-sub { color: var(--muted); font-size: 13px; }
+
+  .upload-preview { display: flex; gap: 16px; align-items: center; }
+  .upload-preview img {
+    width: 88px; height: 88px; object-fit: cover;
+    border-radius: var(--radius-sm); border: 1px solid var(--border);
+  }
+  .upload-info { flex: 1; min-width: 0; }
+  .upload-info .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .upload-info .meta { color: var(--muted); font-size: 13px; }
+  .upload-clear { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; padding: 4px 8px; }
+  .upload-clear:hover { color: var(--text); }
+
+  /* AI prompt input */
+  .prompt-area { display: flex; flex-direction: column; gap: 12px; }
+  .prompt-input {
+    width: 100%; min-height: 110px; resize: vertical;
+    padding: 14px 16px; font-family: inherit; font-size: 14px; line-height: 1.55;
+    border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+    background: #FCFBF8; color: var(--text);
+    transition: border-color 0.15s;
+  }
+  .prompt-input:focus {
+    outline: none; border-color: var(--primary);
+    background: white; box-shadow: 0 0 0 3px rgba(107,70,193,0.1);
+  }
+  .prompt-input::placeholder { color: #A8A095; }
+  .prompt-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .style-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .style-chip {
+    background: white; border: 1px solid var(--border); padding: 6px 12px;
+    font-size: 13px; border-radius: 16px; cursor: pointer;
+    font-family: inherit; transition: all 0.15s;
+  }
+  .style-chip:hover { border-color: var(--border-strong); }
+  .style-chip.selected {
+    background: var(--primary); color: white; border-color: var(--primary);
+  }
+  .btn-generate-ai {
+    background: var(--primary); color: white; border: none;
+    padding: 11px 22px; border-radius: var(--radius-sm);
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all 0.15s ease; font-family: inherit;
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-left: auto;
+  }
+  .btn-generate-ai:hover:not(:disabled) {
+    background: var(--primary-dark); transform: translateY(-1px);
+  }
+  .btn-generate-ai:disabled { background: #C7C0B3; cursor: not-allowed; }
+
+  .ai-notice {
+    background: #FFFBEB; color: #78551A; border: 1px solid #FCD34D;
+    padding: 10px 14px; border-radius: var(--radius-sm); font-size: 13px;
+  }
+
+  /* Fit strategy */
+  .fit-strategy {
+    margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border);
+    display: none;
+  }
+  .fit-strategy.visible { display: block; }
+  .fit-label { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+  .fit-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+  .fit-option {
+    border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+    padding: 10px 14px; cursor: pointer; background: #FCFBF8;
+    transition: all 0.15s; font-size: 13px;
+  }
+  .fit-option:hover { border-color: var(--border-strong); }
+  .fit-option.selected { border-color: var(--primary); background: var(--primary-light); }
+  .fit-option.disabled { opacity: 0.5; cursor: not-allowed; }
+  .fit-option .fit-name { font-weight: 600; margin-bottom: 2px; }
+  .fit-option .fit-desc { color: var(--muted); font-size: 12px; }
+  .fit-option.recommended::before {
+    content: 'RECOMMENDED'; font-size: 9px; font-weight: 600; letter-spacing: 0.5px;
+    color: var(--accent); display: block; margin-bottom: 4px;
+  }
+
+  /* Size grid */
+  .size-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .size-card {
+    border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+    padding: 14px 12px; cursor: pointer; transition: all 0.15s ease;
+    background: #FCFBF8; text-align: left; position: relative;
+  }
+  .size-card:hover { border-color: var(--border-strong); background: #fff; }
+  .size-card.selected {
+    border-color: var(--primary); background: var(--primary-light);
+    box-shadow: 0 0 0 3px rgba(107,70,193,0.1);
+  }
+  .size-card .size-shape {
+    width: 24px; height: 32px; margin-bottom: 6px;
+    background: linear-gradient(135deg, #D4CCBC, #B8AE9A);
+    border-radius: 2px 2px 7px 7px;
+    box-shadow: inset -2px 0 4px rgba(0,0,0,0.1);
+  }
+  .size-card .size-label { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .size-card .size-dims { color: var(--muted); font-size: 11px; }
+  .size-card.selected .size-dims { color: var(--primary); }
+  .size-card .size-popular {
+    position: absolute; top: 6px; right: 6px;
+    background: var(--accent); color: white; font-size: 8px;
+    padding: 2px 5px; border-radius: 6px; font-weight: 600; letter-spacing: 0.4px;
+  }
+
+  /* Generate button */
+  .generate-row { display: flex; justify-content: center; padding: 4px 0 0; }
+  .btn-generate {
+    background: var(--primary); color: white; border: none;
+    padding: 14px 36px; border-radius: var(--radius-sm);
+    font-size: 15px; font-weight: 600; cursor: pointer;
+    transition: all 0.15s ease; font-family: inherit;
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .btn-generate:hover:not(:disabled) {
+    background: var(--primary-dark); transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(107,70,193,0.25);
+  }
+  .btn-generate:disabled { background: #C7C0B3; cursor: not-allowed; }
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: white; border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Results */
+  .results { display: none; }
+  .results.visible { display: block; }
+  .preview-toggle {
+    display: inline-flex; gap: 4px; padding: 4px;
+    background: #F2EDE2; border-radius: 9px; margin-bottom: 18px;
+  }
+  .preview-toggle button {
+    background: transparent; border: none; padding: 8px 16px;
+    font-family: inherit; font-size: 13px; font-weight: 500;
+    color: var(--muted); cursor: pointer; border-radius: 6px;
+    transition: all 0.15s;
+  }
+  .preview-toggle button.active {
+    background: white; color: var(--text); box-shadow: var(--shadow-sm);
+  }
+  .preview-area {
+    aspect-ratio: 4/3; background:
+      linear-gradient(45deg, #f0ece0 25%, transparent 25%),
+      linear-gradient(-45deg, #f0ece0 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #f0ece0 75%),
+      linear-gradient(-45deg, transparent 75%, #f0ece0 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+    background-color: #faf8f2;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; padding: 24px; margin-bottom: 16px;
+  }
+  .preview-area img, .preview-area canvas {
+    max-width: 100%; max-height: 100%; object-fit: contain;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.08);
+  }
+  .preview-meta { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .download-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn-dl {
+    background: white; border: 1px solid var(--border-strong);
+    padding: 10px 18px; border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 500; cursor: pointer;
+    font-family: inherit; transition: all 0.15s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-dl:hover { background: var(--primary); color: white; border-color: var(--primary); }
+  .btn-dl-zip {
+    background: var(--text); color: white; border-color: var(--text);
+  }
+  .btn-dl-zip:hover { background: #000; border-color: #000; }
+
+  /* Footer */
+  .footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 32px; }
+  .error {
+    background: #FEF2F2; color: #991B1B; border: 1px solid #FCA5A5;
+    padding: 12px 16px; border-radius: var(--radius-sm); margin-top: 12px; font-size: 14px;
+  }
+  /* Hidden helpers */
+  .hidden { display: none !important; }
+</style>
 </head>
 <body>
 
-<div class="app">
+<div class="container">
 
-  <!-- HEADER -->
   <header class="header">
-    <div class="header-inner">
-      <div class="logo-wrap">
-        <span class="logo-icon">🪡</span>
-        <div>
-          <h1>Stitchify</h1>
-          <p>Turn any image into a hand embroidery pattern</p>
+    <div class="logo">
+      <div class="logo-mark"></div>
+      Tumblerify
+    </div>
+    <div class="tagline">AI-generated or uploaded designs → print-ready tumbler wraps at any size</div>
+  </header>
+
+  <!-- STEP 1: Get a design (upload or AI generate) -->
+  <section class="step">
+    <div class="step-header">
+      <div class="step-num">1</div>
+      <h2 class="step-title">Bring a design</h2>
+    </div>
+
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-mode="upload">📤 Upload</button>
+      <button class="mode-tab" data-mode="ai" id="aiTab">✨ Generate with AI</button>
+    </div>
+
+    <!-- Upload pane -->
+    <div id="uploadPane">
+      <label class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp" style="display:none" />
+        <div id="uploadEmpty">
+          <div class="upload-icon">📤</div>
+          <div class="upload-text">Click to upload or drag &amp; drop</div>
+          <div class="upload-sub">PNG, JPG, or WebP — any size</div>
+        </div>
+        <div id="uploadFilled" class="upload-preview" style="display:none">
+          <img id="thumbPreview" alt="" />
+          <div class="upload-info">
+            <div class="name" id="thumbName"></div>
+            <div class="meta" id="thumbMeta"></div>
+          </div>
+          <button class="upload-clear" id="clearBtn" type="button" title="Remove">✕</button>
+        </div>
+      </label>
+    </div>
+
+    <!-- AI pane -->
+    <div id="aiPane" class="hidden">
+      <div id="aiNotConfigured" class="ai-notice hidden">
+        AI generation is disabled. Set <code>GOOGLE_API_KEY</code> in your environment to enable.
+      </div>
+      <div id="aiConfigured" class="prompt-area">
+        <textarea id="promptInput" class="prompt-input"
+          placeholder="Describe your tumbler design...&#10;&#10;Example: Soft watercolor florals in pastel pink and teal, with 'Mom' in elegant script lettering, gold accents"></textarea>
+        <div class="style-chips">
+          <button class="style-chip selected" data-style="">No style preset</button>
+          <button class="style-chip" data-style="watercolor">Watercolor</button>
+          <button class="style-chip" data-style="vintage">Vintage</button>
+          <button class="style-chip" data-style="bold-modern">Bold Modern</button>
+          <button class="style-chip" data-style="floral">Floral</button>
+          <button class="style-chip" data-style="boho">Boho</button>
+          <button class="style-chip" data-style="minimalist">Minimalist</button>
+        </div>
+        <div class="prompt-row">
+          <div style="font-size:13px; color:var(--muted)">Generated to match the size you choose in step 2.</div>
+          <button id="btnGenerateAi" class="btn-generate-ai" disabled>
+            <span id="aiBtnText">✨ Generate Design</span>
+          </button>
         </div>
       </div>
     </div>
-  </header>
 
-  <!-- MAIN -->
-  <main class="main">
+    <!-- Fit strategy (shown after design exists, if size mismatch) -->
+    <div class="fit-strategy" id="fitStrategy">
+      <div class="fit-label" id="fitLabel">Source aspect doesn't match cup — choose how to fit:</div>
+      <div class="fit-options" id="fitOptions"></div>
+    </div>
+  </section>
 
-    <!-- STEP 1: UPLOAD -->
-    <section class="card" id="upload-section">
-      <div class="step-label">Step 1</div>
-      <h2>Upload Your Image</h2>
-      <p class="subtitle">Upload a JPG or PNG — a photo, illustration, or any design you'd love to stitch.</p>
+  <!-- STEP 2: Size selector -->
+  <section class="step">
+    <div class="step-header">
+      <div class="step-num">2</div>
+      <h2 class="step-title">Choose tumbler size</h2>
+    </div>
+    <p class="step-desc">Output dimensions auto-adjust to industry-standard sublimation specs at 300 DPI.</p>
+    <div class="size-grid" id="sizeGrid"></div>
+  </section>
 
-      <div class="upload-zone" id="uploadZone">
-        <input type="file" id="fileInput" accept="image/jpeg,image/png,image/jpg" onchange="handleFile(this)">
-        <div class="upload-inner" id="uploadInner" onclick="document.getElementById('fileInput').click()">
-          <div class="upload-icon">📁</div>
-          <p class="upload-text">Click to upload or drag & drop</p>
-          <p class="upload-hint">JPG or PNG, max 20MB</p>
-        </div>
-        <div class="preview-wrap" id="previewWrap" style="display:none">
-          <img id="previewImg" src="" alt="Preview">
-          <button class="change-btn" onclick="resetUpload()">✕ Change image</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- STEP 2: SETTINGS -->
-    <section class="card" id="settings-section">
-      <div class="step-label">Step 2</div>
-      <h2>Pattern Settings</h2>
-      <p class="subtitle">Adjust how your pattern looks.</p>
-
-      <div class="settings-grid">
-        <div class="setting-item">
-          <label>Sensitivity</label>
-          <div class="slider-row">
-            <input type="range" id="sensitivity" min="50" max="220" value="128" oninput="document.getElementById('sensVal').textContent=this.value">
-            <span id="sensVal">128</span>
-          </div>
-          <p class="setting-hint">Higher = more detail captured</p>
-        </div>
-        <div class="setting-item">
-          <label>Line Thickness</label>
-          <div class="slider-row">
-            <input type="range" id="thickness" min="1" max="3" value="1" step="0.5" oninput="document.getElementById('thickVal').textContent=this.value+'px'">
-            <span id="thickVal">1px</span>
-          </div>
-          <p class="setting-hint">Thickness of the pattern lines</p>
-        </div>
-      </div>
-
-      <button class="primary-btn" id="convertBtn" onclick="convert()" disabled>
-        <span id="btnText">🪡 Generate Pattern</span>
+  <!-- STEP 3: Generate -->
+  <section class="step">
+    <div class="step-header">
+      <div class="step-num">3</div>
+      <h2 class="step-title">Generate files</h2>
+    </div>
+    <div class="generate-row">
+      <button id="generateBtn" class="btn-generate" disabled>
+        <span id="genBtnText">Generate Files</span>
       </button>
-    </section>
+    </div>
+    <div id="errorBox"></div>
+  </section>
 
-    <!-- STEP 3: RESULT -->
-    <section class="card result-card" id="result-section" style="display:none">
-      <div class="step-label">Step 3</div>
-      <h2>Your Pattern is Ready!</h2>
-
-      <div class="result-grid">
-        <!-- Preview -->
-        <div class="result-preview">
-          <div class="preview-tabs">
-            <button class="ptab active" data-type="pattern"    onclick="switchPreview('pattern', event)">Pattern</button>
-            <button class="ptab"        data-type="original"   onclick="switchPreview('original', event)">Original</button>
-            <button class="ptab"        data-type="embroidery" id="embroideryTab" onclick="switchPreview('embroidery', event)" style="display:none">✨ Embroidered</button>
-          </div>
-          <div class="hoop-preview-wrap">
-            <div class="hoop-circle">
-              <img id="patternPreviewImg"    src="" alt="Pattern">
-              <img id="originalPreviewImg"   src="" alt="Original"   style="display:none">
-              <img id="embroideryPreviewImg" src="" alt="Embroidered" style="display:none">
-            </div>
-          </div>
-        </div>
-
-        <!-- Info -->
-        <div class="result-info">
-          <h3 id="patternTitle">My Pattern</h3>
-          <p id="patternDesc" class="pattern-desc"></p>
-
-          <div class="meta-row">
-            <span class="meta-label">Difficulty</span>
-            <span class="badge" id="diffBadge">Beginner</span>
-          </div>
-
-          <div class="colors-section">
-            <p class="colors-label">Suggested DMC Colors</p>
-            <div class="colors-grid" id="colorsGrid"></div>
-          </div>
-
-          <div class="stitch-tips">
-            <p class="colors-label">Stitch Suggestions</p>
-            <p id="stitchTips" class="tips-text"></p>
-          </div>
-
-          <button class="download-btn" id="downloadBtn" onclick="downloadZip()">
-            ⬇ Download Embroidery Pack (ZIP)
-          </button>
-          <p class="download-hint">Includes your pattern PDF (all 6 hoop sizes) + Beginner's Guide PDF</p>
-        </div>
-      </div>
-    </section>
-
-  </main>
+  <!-- RESULTS -->
+  <section class="step results" id="resultsSection">
+    <div class="step-header">
+      <div class="step-num" style="background: var(--success)">✓</div>
+      <h2 class="step-title">Your files are ready</h2>
+    </div>
+    <div class="preview-toggle">
+      <button class="active" data-view="straight">Straight</button>
+      <button data-view="warped">Warped</button>
+    </div>
+    <div class="preview-area" id="previewArea"></div>
+    <div class="preview-meta" id="previewMeta"></div>
+    <div class="download-row">
+      <button class="btn-dl" id="dlFlat">⬇ Flat PNG</button>
+      <button class="btn-dl" id="dlTapered">⬇ Tapered PNG</button>
+      <button class="btn-dl btn-dl-zip" id="dlZip">⬇ Both as ZIP</button>
+    </div>
+  </section>
 
   <footer class="footer">
-    <p>Made with 🪡 by Stitchify</p>
+    Designs and uploads are processed locally. AI generation uses your server's Gemini key.
   </footer>
-
 </div>
 
-<!-- LOADING OVERLAY -->
-<div class="loading-overlay" id="loadingOverlay" style="display:none">
-  <div class="loading-box">
-    <div class="loading-spinner"></div>
-    <p id="loadingText">Analysing your image...</p>
-  </div>
-</div>
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────────────────────────────────────
+const TUMBLER_SIZES = {
+  '11oz_mug':      { label: '11oz Mug',      flat: { w: 9.5, h: 3.7 }, tapered: { topW: 9.5, botW: 9.5, h: 3.7 }, aiRatio: '21:9' },
+  '12oz_skinny':   { label: '12oz Skinny',   flat: { w: 8.5, h: 5.4 }, tapered: { topW: 8.5, botW: 7.4, h: 5.4 }, aiRatio: '3:2' },
+  '15oz_mug':      { label: '15oz Mug',      flat: { w: 9.5, h: 4.5 }, tapered: { topW: 9.5, botW: 9.5, h: 4.5 }, aiRatio: '21:9' },
+  '16oz_pint':     { label: '16oz Pint',     flat: { w: 8.5, h: 5.7 }, tapered: { topW: 8.5, botW: 8.0, h: 5.7 }, aiRatio: '3:2' },
+  '20oz_skinny':   { label: '20oz Skinny',   flat: { w: 9.3, h: 8.2 }, tapered: { topW: 9.3, botW: 8.5, h: 8.2 }, aiRatio: '5:4', popular: true },
+  '22oz_fatty':    { label: '22oz Fatty',    flat: { w: 9.6, h: 8.0 }, tapered: { topW: 9.6, botW: 8.5, h: 8.0 }, aiRatio: '5:4' },
+  '30oz_tumbler':  { label: '30oz Tumbler',  flat: { w: 9.5, h: 9.6 }, tapered: { topW: 9.5, botW: 8.0, h: 9.6 }, aiRatio: '1:1' },
+  '40oz_quencher': { label: '40oz Quencher', flat: { w: 10.5, h: 11.4 }, tapered: { topW: 10.5, botW: 9.5, h: 11.4 }, aiRatio: '1:1' }
+};
 
-<!-- CONFETTI -->
-<div class="cf" id="cf"></div>
+const STYLE_HINTS = {
+  '': '',
+  'watercolor': ', soft watercolor style, gentle pastel colors, organic flowing shapes',
+  'vintage': ', vintage aesthetic, muted earthy tones, slightly distressed texture',
+  'bold-modern': ', bold modern graphic style, vibrant colors, clean geometric lines',
+  'floral': ', delicate floral elements, botanical accents, leaves and flowers',
+  'boho': ', bohemian style, warm earthy tones, natural textures, free-spirited',
+  'minimalist': ', minimalist design, clean simple lines, lots of negative space, refined'
+};
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="app.js"></script>
+const DPI = 300;
+const inchesToPx = (inches) => Math.round(inches * DPI);
+
+const state = {
+  mode: 'upload',         // 'upload' | 'ai'
+  selectedSize: '20oz_skinny',
+  selectedStyle: '',
+  imageEl: null,          // HTMLImageElement of the current design
+  imageDataUrl: null,     // base64 data URL of source (used for AI extend)
+  imageMeta: null,        // { name, w, h, sizeKB }
+  fitStrategy: 'cover',   // 'cover' | 'mirror' | 'ai-extend'
+  results: null,          // { flat, tapered, sizeKey }
+  currentView: 'straight',
+  aiEnabled: false
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG FETCH (does the server have a Gemini key?)
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadConfig() {
+  try {
+    const r = await fetch('/api/config');
+    const cfg = await r.json();
+    state.aiEnabled = !!cfg.aiEnabled;
+  } catch { state.aiEnabled = false; }
+  document.getElementById('aiTab').disabled = !state.aiEnabled;
+  if (!state.aiEnabled) {
+    document.getElementById('aiTab').innerHTML = '✨ Generate with AI <span class="lock">🔒</span>';
+  }
+  document.getElementById('aiNotConfigured').classList.toggle('hidden', state.aiEnabled);
+  document.getElementById('aiConfigured').classList.toggle('hidden', !state.aiEnabled);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODE TABS
+// ─────────────────────────────────────────────────────────────────────────────
+function setupModeTabs() {
+  for (const tab of document.querySelectorAll('.mode-tab')) {
+    tab.onclick = () => {
+      if (tab.disabled) return;
+      const mode = tab.dataset.mode;
+      state.mode = mode;
+      document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t === tab));
+      document.getElementById('uploadPane').classList.toggle('hidden', mode !== 'upload');
+      document.getElementById('aiPane').classList.toggle('hidden', mode !== 'ai');
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIZE GRID
+// ─────────────────────────────────────────────────────────────────────────────
+function renderSizeGrid() {
+  const grid = document.getElementById('sizeGrid');
+  grid.innerHTML = '';
+  for (const [key, cfg] of Object.entries(TUMBLER_SIZES)) {
+    const card = document.createElement('div');
+    card.className = 'size-card' + (key === state.selectedSize ? ' selected' : '');
+    const taperRatio = cfg.tapered.botW / cfg.tapered.topW;
+    card.innerHTML = `
+      ${cfg.popular ? '<div class="size-popular">POPULAR</div>' : ''}
+      <div class="size-shape" style="clip-path: polygon(0 0, 100% 0, ${50 + 50*taperRatio}% 100%, ${50 - 50*taperRatio}% 100%);"></div>
+      <div class="size-label">${cfg.label}</div>
+      <div class="size-dims">${cfg.flat.w}" × ${cfg.flat.h}"</div>
+    `;
+    card.onclick = () => {
+      state.selectedSize = key;
+      renderSizeGrid();
+      updateFitStrategyVisibility();
+      hideResults();
+    };
+    grid.appendChild(card);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UPLOAD
+// ─────────────────────────────────────────────────────────────────────────────
+function setupUpload() {
+  const zone   = document.getElementById('uploadZone');
+  const input  = document.getElementById('fileInput');
+  const clr    = document.getElementById('clearBtn');
+
+  function loadFile(file) {
+    if (!file || !file.type.startsWith('image/')) return showError('Please upload an image file.');
+    clearError();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      loadImageFromDataUrl(e.target.result, file.name, file.size);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  input.onchange = (e) => loadFile(e.target.files[0]);
+  ['dragenter','dragover'].forEach(evt =>
+    zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add('dragging'); })
+  );
+  ['dragleave','drop'].forEach(evt =>
+    zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.remove('dragging'); })
+  );
+  zone.addEventListener('drop', (e) => loadFile(e.dataTransfer.files[0]));
+
+  clr.onclick = (e) => { e.preventDefault(); e.stopPropagation(); clearImage(); };
+}
+
+function loadImageFromDataUrl(dataUrl, filename = 'ai-generated.png', sizeBytes = 0) {
+  const img = new Image();
+  img.onload = () => {
+    state.imageEl = img;
+    state.imageDataUrl = dataUrl;
+    state.imageMeta = { name: filename, w: img.naturalWidth, h: img.naturalHeight, sizeKB: sizeBytes ? Math.round(sizeBytes/1024) : 0 };
+    showImagePreview();
+    updateGenerateButton();
+    updateFitStrategyVisibility();
+    hideResults();
+  };
+  img.onerror = () => showError('Could not load that image.');
+  img.src = dataUrl;
+}
+
+function showImagePreview() {
+  const empty  = document.getElementById('uploadEmpty');
+  const filled = document.getElementById('uploadFilled');
+  const zone   = document.getElementById('uploadZone');
+  document.getElementById('thumbPreview').src = state.imageDataUrl;
+  document.getElementById('thumbName').textContent = state.imageMeta.name;
+  document.getElementById('thumbMeta').textContent =
+    `${state.imageMeta.w} × ${state.imageMeta.h} px${state.imageMeta.sizeKB ? ' • ' + state.imageMeta.sizeKB + ' KB' : ''}`;
+  empty.style.display = 'none';
+  filled.style.display = 'flex';
+  zone.classList.add('has-file');
+
+  // Make sure user is on the upload pane to see the preview, regardless of mode
+  // (AI-generated images also show here for clarity)
+  document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === 'upload'));
+  document.getElementById('uploadPane').classList.remove('hidden');
+  document.getElementById('aiPane').classList.add('hidden');
+  state.mode = 'upload';
+}
+
+function clearImage() {
+  state.imageEl = null; state.imageDataUrl = null; state.imageMeta = null;
+  document.getElementById('fileInput').value = '';
+  document.getElementById('uploadEmpty').style.display = 'block';
+  document.getElementById('uploadFilled').style.display = 'none';
+  document.getElementById('uploadZone').classList.remove('has-file');
+  updateGenerateButton();
+  updateFitStrategyVisibility();
+  hideResults();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIT STRATEGY
+// ─────────────────────────────────────────────────────────────────────────────
+function updateFitStrategyVisibility() {
+  const wrap = document.getElementById('fitStrategy');
+  if (!state.imageEl) { wrap.classList.remove('visible'); return; }
+
+  const cfg = TUMBLER_SIZES[state.selectedSize];
+  const targetRatio = cfg.flat.w / cfg.flat.h;
+  const sourceRatio = state.imageEl.naturalWidth / state.imageEl.naturalHeight;
+  const pctOff = Math.abs(Math.log(sourceRatio / targetRatio)) * 100;
+
+  const label = document.getElementById('fitLabel');
+  const opts  = document.getElementById('fitOptions');
+
+  if (pctOff < 3) {
+    label.textContent = `Source is a near-perfect match for ${cfg.label} — no adjustment needed.`;
+    opts.innerHTML = '';
+    state.fitStrategy = 'cover';
+    wrap.classList.add('visible');
+    return;
+  }
+
+  // Determine which dimension needs help
+  const needsMoreWidth = sourceRatio < targetRatio;   // source taller than target → need to widen
+  const direction = needsMoreWidth ? 'horizontally' : 'vertically';
+  label.textContent = `Source is ${pctOff.toFixed(0)}% off from ${cfg.label} (${cfg.flat.w}×${cfg.flat.h}"). Choose how to fit ${direction}:`;
+
+  // Build options
+  const recommended = pctOff < 8 ? 'cover' : (state.aiEnabled ? 'ai-extend' : 'mirror');
+  const options = [
+    {
+      key: 'cover',
+      name: 'Crop to fit',
+      desc: `Loses ~${pctOff.toFixed(0)}% of edges. Fastest.`
+    },
+    {
+      key: 'mirror',
+      name: 'Mirror extend',
+      desc: 'Reflects edges to fill. Free, instant. Best for symmetric/abstract designs.'
+    },
+    {
+      key: 'ai-extend',
+      name: 'AI extend ✨',
+      desc: state.aiEnabled
+        ? 'Uses Gemini to extend naturally. ~5 seconds.'
+        : 'Requires GOOGLE_API_KEY on server.'
+    }
+  ];
+  opts.innerHTML = options.map(o => `
+    <div class="fit-option ${o.key === recommended ? 'recommended' : ''} ${o.key === 'ai-extend' && !state.aiEnabled ? 'disabled' : ''}"
+         data-fit="${o.key}">
+      <div class="fit-name">${o.name}</div>
+      <div class="fit-desc">${o.desc}</div>
+    </div>
+  `).join('');
+  state.fitStrategy = recommended;
+  for (const el of opts.querySelectorAll('.fit-option')) {
+    if (el.dataset.fit === state.fitStrategy) el.classList.add('selected');
+    el.onclick = () => {
+      if (el.classList.contains('disabled')) return;
+      state.fitStrategy = el.dataset.fit;
+      for (const e of opts.querySelectorAll('.fit-option')) e.classList.toggle('selected', e === el);
+      hideResults();
+    };
+  }
+  wrap.classList.add('visible');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI GENERATION
+// ─────────────────────────────────────────────────────────────────────────────
+function setupAi() {
+  const promptEl = document.getElementById('promptInput');
+  const btn      = document.getElementById('btnGenerateAi');
+
+  promptEl.oninput = () => { btn.disabled = !promptEl.value.trim(); };
+
+  for (const chip of document.querySelectorAll('.style-chip')) {
+    chip.onclick = () => {
+      state.selectedStyle = chip.dataset.style;
+      document.querySelectorAll('.style-chip').forEach(c => c.classList.toggle('selected', c === chip));
+    };
+  }
+
+  btn.onclick = handleAiGenerate;
+}
+
+async function handleAiGenerate() {
+  const promptEl = document.getElementById('promptInput');
+  const btn      = document.getElementById('btnGenerateAi');
+  const txt      = document.getElementById('aiBtnText');
+  const userPrompt = promptEl.value.trim();
+  if (!userPrompt) return;
+
+  clearError();
+  btn.disabled = true;
+  txt.innerHTML = '<span class="spinner"></span> Generating…';
+
+  try {
+    const cfg = TUMBLER_SIZES[state.selectedSize];
+    const fullPrompt = userPrompt + (STYLE_HINTS[state.selectedStyle] || '');
+    const r = await fetch('/api/generate-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: fullPrompt, aspectRatio: cfg.aiRatio, imageSize: '2K' })
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.error || `HTTP ${r.status}`);
+    }
+    const { dataUrl } = await r.json();
+    loadImageFromDataUrl(dataUrl, `tumblerify-ai-${Date.now()}.png`);
+  } catch (err) {
+    console.error(err);
+    showError('AI generation failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    txt.textContent = '✨ Generate Design';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMAGE PROCESSING
+// ─────────────────────────────────────────────────────────────────────────────
+function updateGenerateButton() {
+  document.getElementById('generateBtn').disabled = !state.imageEl;
+}
+
+// FLAT — design at correct print dimensions, applying selected fit strategy
+async function generateFlat(img, sizeCfg, strategy) {
+  const w = inchesToPx(sizeCfg.flat.w);
+  const h = inchesToPx(sizeCfg.flat.h);
+
+  if (strategy === 'ai-extend') {
+    // Send to server for outpainting at the closest supported aspect ratio,
+    // then cover-fit the result to exact print dimensions
+    const r = await fetch('/api/extend-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageDataUrl: state.imageDataUrl, aspectRatio: sizeCfg.aiRatio, imageSize: '2K' })
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.error || `extend-image HTTP ${r.status}`);
+    }
+    const { dataUrl } = await r.json();
+    const extended = await loadImage(dataUrl);
+    return drawCoverFit(extended, w, h);
+  }
+
+  if (strategy === 'mirror') {
+    return drawMirrorFit(img, w, h);
+  }
+  // default: cover
+  return drawCoverFit(img, w, h);
+}
+
+function drawCoverFit(img, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  const scale = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+  const sw = img.naturalWidth * scale, sh = img.naturalHeight * scale;
+  ctx.drawImage(img, (w - sw) / 2, (h - sh) / 2, sw, sh);
+  return c;
+}
+
+// Mirror-extend: contain-fit the image, then mirror edge strips into the empty gaps.
+// Sampling from the rendered canvas (not the source image) avoids source/display
+// coordinate mismatches and gives perfectly aligned reflections.
+function drawMirrorFit(img, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+
+  // Step 1: contain-fit base
+  const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
+  const baseW = Math.round(img.naturalWidth * scale);
+  const baseH = Math.round(img.naturalHeight * scale);
+  const baseX = Math.round((w - baseW) / 2);
+  const baseY = Math.round((h - baseH) / 2);
+  ctx.drawImage(img, baseX, baseY, baseW, baseH);
+
+  // Step 2: mirror left/right gaps (only fires when source is narrower than target)
+  if (baseX > 0) {
+    // Left gap — reflect baseX-pixel-wide strip from the left edge of the base
+    ctx.save();
+    ctx.translate(baseX * 2, 0);
+    ctx.scale(-1, 1);
+    // Source rect from canvas itself: [baseX, baseY, baseX+gap, baseH]
+    ctx.drawImage(c, baseX, baseY, baseX, baseH, 0, baseY, baseX, baseH);
+    ctx.restore();
+
+    // Right gap
+    const rightX = baseX + baseW;
+    const rightGap = w - rightX;
+    if (rightGap > 0) {
+      ctx.save();
+      ctx.translate(rightX * 2 + rightGap, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(c, rightX - rightGap, baseY, rightGap, baseH, 0, baseY, rightGap, baseH);
+      ctx.restore();
+    }
+  }
+
+  // Step 3: mirror top/bottom gaps (only fires when source is shorter than target)
+  if (baseY > 0) {
+    // Top gap
+    ctx.save();
+    ctx.translate(0, baseY * 2);
+    ctx.scale(1, -1);
+    ctx.drawImage(c, 0, baseY, w, baseY, 0, 0, w, baseY);
+    ctx.restore();
+
+    // Bottom gap
+    const botY = baseY + baseH;
+    const botGap = h - botY;
+    if (botGap > 0) {
+      ctx.save();
+      ctx.translate(0, botY * 2 + botGap);
+      ctx.scale(1, -1);
+      ctx.drawImage(c, 0, botY - botGap, w, botGap, 0, 0, w, botGap);
+      ctx.restore();
+    }
+  }
+  return c;
+}
+
+// TAPERED — apply trapezoid transform to the flat output
+function generateTapered(flatCanvas, sizeCfg) {
+  const t = sizeCfg.tapered;
+  const topPx = inchesToPx(t.topW);
+  const botPx = inchesToPx(t.botW);
+  const hPx   = inchesToPx(t.h);
+  const maxW  = Math.max(topPx, botPx);
+
+  const c = document.createElement('canvas');
+  c.width = maxW; c.height = hPx;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+
+  const slices = Math.min(hPx, 800);
+  const sliceH = hPx / slices;
+  const srcSliceH = flatCanvas.height / slices;
+
+  for (let i = 0; i < slices; i++) {
+    const ratio = i / (slices - 1);
+    const rowW  = topPx + (botPx - topPx) * ratio;
+    const xOff  = (maxW - rowW) / 2;
+    ctx.drawImage(
+      flatCanvas,
+      0, i * srcSliceH, flatCanvas.width, srcSliceH + 1,
+      xOff, i * sliceH, rowW, sliceH + 1
+    );
+  }
+  return c;
+}
+
+function loadImage(src) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = src;
+  });
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN GENERATE FLOW
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleGenerate() {
+  if (!state.imageEl) return;
+  clearError();
+  const btn = document.getElementById('generateBtn');
+  const txt = document.getElementById('genBtnText');
+  btn.disabled = true;
+  txt.innerHTML = '<span class="spinner"></span> Generating…';
+
+  try {
+    await sleep(50);
+    const sizeCfg = TUMBLER_SIZES[state.selectedSize];
+
+    if (state.fitStrategy === 'ai-extend') {
+      txt.innerHTML = '<span class="spinner"></span> AI extending…';
+    } else {
+      txt.innerHTML = '<span class="spinner"></span> Rendering flat…';
+    }
+    await sleep(20);
+    const flat = await generateFlat(state.imageEl, sizeCfg, state.fitStrategy);
+
+    txt.innerHTML = '<span class="spinner"></span> Tapering…';
+    await sleep(20);
+    const tapered = generateTapered(flat, sizeCfg);
+
+    state.results = { flat, tapered, sizeKey: state.selectedSize };
+    showResults();
+  } catch (err) {
+    console.error(err);
+    showError('Generation failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    txt.textContent = 'Generate Files';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESULTS UI
+// ─────────────────────────────────────────────────────────────────────────────
+function showResults() {
+  const cfg = TUMBLER_SIZES[state.results.sizeKey];
+  state.currentView = 'straight';
+  for (const b of document.querySelectorAll('.preview-toggle button')) {
+    b.classList.toggle('active', b.dataset.view === 'straight');
+  }
+  renderPreview();
+  document.getElementById('previewMeta').textContent =
+    `Flat: ${cfg.flat.w}" × ${cfg.flat.h}" @ 300 DPI  •  Tapered: ${cfg.tapered.topW}" top × ${cfg.tapered.botW}" bottom × ${cfg.tapered.h}" tall`;
+  document.getElementById('resultsSection').classList.add('visible');
+  document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function renderPreview() {
+  const area = document.getElementById('previewArea');
+  area.innerHTML = '';
+  const src = state.currentView === 'straight' ? state.results.flat : state.results.tapered;
+  const thumb = makeThumbnail(src, 800);
+  area.appendChild(thumb);
+}
+
+function makeThumbnail(srcCanvas, maxSide) {
+  const ratio = srcCanvas.width / srcCanvas.height;
+  const w = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
+  const h = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
+  const t = document.createElement('canvas');
+  t.width = w; t.height = h;
+  const tctx = t.getContext('2d');
+  tctx.imageSmoothingQuality = 'high';
+  tctx.drawImage(srcCanvas, 0, 0, w, h);
+  return t;
+}
+
+function hideResults() {
+  document.getElementById('resultsSection').classList.remove('visible');
+  state.results = null;
+}
+
+function setupResultsToggle() {
+  for (const b of document.querySelectorAll('.preview-toggle button')) {
+    b.onclick = () => {
+      if (!state.results) return;
+      state.currentView = b.dataset.view;
+      for (const x of document.querySelectorAll('.preview-toggle button')) x.classList.toggle('active', x === b);
+      renderPreview();
+    };
+  }
+}
+
+function downloadCanvas(canvas, filename) {
+  canvas.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
+}
+
+async function downloadZip() {
+  if (!state.results) return;
+  const cfg = TUMBLER_SIZES[state.results.sizeKey];
+  const baseName = cfg.label.replace(/\s+/g, '-');
+  const zip = new JSZip();
+  const folder = zip.folder(baseName);
+  const blob = (c) => new Promise(res => c.toBlob(res, 'image/png'));
+  folder.file(`${baseName}-flat.png`,    await blob(state.results.flat));
+  folder.file(`${baseName}-tapered.png`, await blob(state.results.tapered));
+  const out = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(out);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${baseName}-tumblerify.zip`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ERROR
+// ─────────────────────────────────────────────────────────────────────────────
+function showError(msg) {
+  document.getElementById('errorBox').innerHTML = `<div class="error">${msg}</div>`;
+}
+function clearError() {
+  document.getElementById('errorBox').innerHTML = '';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────────────────────────────────────
+loadConfig();
+setupModeTabs();
+renderSizeGrid();
+setupUpload();
+setupAi();
+setupResultsToggle();
+document.getElementById('generateBtn').onclick = handleGenerate;
+document.getElementById('dlFlat').onclick    = () => state.results && downloadCanvas(state.results.flat,    `${TUMBLER_SIZES[state.results.sizeKey].label.replace(/\s+/g,'-')}-flat.png`);
+document.getElementById('dlTapered').onclick = () => state.results && downloadCanvas(state.results.tapered, `${TUMBLER_SIZES[state.results.sizeKey].label.replace(/\s+/g,'-')}-tapered.png`);
+document.getElementById('dlZip').onclick     = downloadZip;
+</script>
+
 </body>
 </html>
